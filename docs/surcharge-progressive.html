@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Surcharge progressive — méthode</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <style>
+    body { padding-bottom: 40px; }
+    .container { max-width: 760px; }
+    table { width: 100%; border-collapse: collapse; font-size: 15px; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    li { margin: 4px 0; }
+    .src li { font-size: 14px; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+<main class="container">
+  <p><a href="../index.html">← Retour à l’app</a></p>
+  <h1>Surcharge progressive : la méthode utilisée</h1>
+
+  <div class="card">
+    <h2>En bref</h2>
+    <p>L’app utilise la <strong>double progression</strong> : pour chaque exercice on fixe une <strong>fourchette de répétitions</strong> (ex. 6–10 pour le hip thrust).</p>
+    <ol>
+      <li>Tant que toutes tes séries ne sont pas au <strong>haut de la fourchette</strong>, tu gardes la charge et tu vises <strong>+1 répétition par série</strong>.</li>
+      <li>Quand toutes les séries atteignent le haut de la fourchette, tu <strong>ajoutes de la charge</strong> (≈ 2–5 % haut du corps / isolation, ≈ 5–10 % bas du corps) et tu redescends dans la fourchette.</li>
+      <li>Si tu tombes sous le bas de la fourchette <strong>deux séances de suite</strong>, l’app propose de baisser la charge d’environ 8 %.</li>
+    </ol>
+    <p>Option prudente (Réglages) : exiger le haut de fourchette sur <strong>deux séances consécutives</strong> avant d’augmenter, comme le recommandent l’ACSM et la NSCA.</p>
+  </div>
+
+  <div class="card">
+    <h2>Ton exemple : hip thrust machine, 2 × 8 à 120 kg</h2>
+    <p>Fourchette 6–10 reps, incrément 5 kg (modifiable, tu peux mettre 10 kg).</p>
+    <table>
+      <thead><tr><th>Séance</th><th>Réalisé</th><th>Objectif suivant proposé</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>120 kg × 8 / 8</td><td>120 kg × 9 / 9 (+1 rep par série)</td></tr>
+        <tr><td>2</td><td>120 kg × 9 / 9</td><td>120 kg × 10 / 10</td></tr>
+        <tr><td>3</td><td>120 kg × 10 / 10</td><td>125 kg × 8 / 8 (ou 130 kg × 6 si incrément 10 kg)</td></tr>
+        <tr><td>4</td><td>125 kg × 8 / 7</td><td>125 kg × 9 / 8</td></tr>
+      </tbody>
+    </table>
+    <p class="muted small">Le nombre de répétitions visé après une hausse de charge est estimé avec la formule d’Epley (1RM ≈ charge × (1 + reps/30)) : 120 × 10 ≈ 160 kg de 1RM estimé → ≈ 8 reps à 125 kg, ≈ 6 reps à 130 kg. C’est exactement le « 10 reps à 120 kg puis 6 reps à 130 kg » de ton idée.</p>
+  </div>
+
+  <div class="card">
+    <h2>Pourquoi ces règles</h2>
+    <ul>
+      <li><strong>Ajouter des reps est aussi efficace qu’ajouter du poids pour l’hypertrophie.</strong> Chez des pratiquants entraînés, 8 semaines de progression en répétitions ou en charge ont donné une prise de muscle similaire (Plotkin et al., 2022). La double progression combine les deux.</li>
+      <li><strong>Seuil pour augmenter la charge :</strong> l’ACSM recommande +2 à 10 % quand on réalise 1 à 2 reps au-dessus de l’objectif sur deux séances consécutives (pourcentage plus faible pour les petits groupes musculaires, plus élevé pour les gros). La NSCA formule la même idée avec la règle « 2-for-2 ».</li>
+      <li><strong>Large gamme de reps possible :</strong> l’hypertrophie est comparable de ~6 à ~30 reps si les séries sont proches de l’échec (Schoenfeld et al., 2021). Les fourchettes 6–10 (gros mouvements) et 10–15 (isolation) sont des choix pratiques, modifiables par exercice.</li>
+      <li><strong>Intensité :</strong> vise 1 à 3 répétitions en réserve (RIR) sur la plupart des séries (échelle RIR de Helms et al., 2016). La progression n’est valable que si l’exécution reste identique.</li>
+      <li><strong>En sèche :</strong> un déficit calorique ralentit la progression. L’objectif prioritaire est de <strong>maintenir les charges</strong> ; une perte de poids de 0,5–1 % par semaine et un apport protéique élevé aident à préserver le muscle (Helms, Aragon &amp; Fitschen, 2014). Des stagnations sont normales : l’app les signale sans te pousser à forcer.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Nutrition (onglet Repas)</h2>
+    <ul>
+      <li>Valeurs des aliments : table <strong>Ciqual (ANSES)</strong> et USDA, pour 100 g, arrondies ; recherche possible dans <strong>Open Food Facts</strong>.</li>
+      <li>Calories cibles : équation de <strong>Mifflin-St Jeor</strong> × niveau d’activité − déficit choisi (20 % par défaut).</li>
+      <li>Protéines : 2,2 g/kg de poids de corps par défaut (Helms 2014 : 2,3–3,1 g/kg de masse maigre en sèche) ; lipides 25 % des calories (15–30 % recommandés) ; glucides = le reste.</li>
+      <li>Cardio : dépense estimée avec les MET du <em>Compendium of Physical Activities</em>.</li>
+    </ul>
+  </div>
+
+  <div class="card src">
+    <h2>Sources</h2>
+    <ol>
+      <li>American College of Sports Medicine (2009). Progression models in resistance training for healthy adults. <em>Med Sci Sports Exerc</em> 41(3):687–708. <a href="https://pubmed.ncbi.nlm.nih.gov/19204579/">PubMed</a></li>
+      <li>Plotkin D. et al. (2022). Progressive overload without progressing load? The effects of load or repetition progression on muscular adaptations. <em>PeerJ</em> 10:e14142. <a href="https://peerj.com/articles/14142/">Article</a></li>
+      <li>Schoenfeld B.J., Grgic J. et al. (2021). Loading recommendations for muscle strength, hypertrophy, and local endurance: a re-examination of the repetition continuum. <em>Sports</em> 9(2):32. <a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC7927075/">PMC</a></li>
+      <li>Haff G.G., Triplett N.T. (dir.) — NSCA, <em>Essentials of Strength Training and Conditioning</em>, chap. « Program design for resistance training » (règle 2-for-2).</li>
+      <li>Helms E.R. et al. (2016). Application of the repetitions in reserve-based RPE scale for resistance training. <em>Strength Cond J</em> 38(4):42–49.</li>
+      <li>Helms E.R., Aragon A.A., Fitschen P.J. (2014). Evidence-based recommendations for natural bodybuilding contest preparation: nutrition and supplementation. <em>JISSN</em> 11:20. <a href="https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4033492/">PMC</a></li>
+      <li>Mifflin M.D., St Jeor S.T. et al. (1990). A new predictive equation for resting energy expenditure in healthy individuals. <em>Am J Clin Nutr</em> 51(2):241–247.</li>
+      <li>ANSES, Table de composition nutritionnelle des aliments Ciqual. <a href="https://ciqual.anses.fr/">ciqual.anses.fr</a></li>
+    </ol>
+  </div>
+</main>
+</body>
+</html>
