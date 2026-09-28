@@ -1,7 +1,9 @@
-// Stockage local (sur l'iPad) + utilitaires de dates.
-import { DEFAULT_EXERCISES, DEFAULT_FOODS, DEFAULT_PLAN, TYPE_DEFAULTS, MEAL_SLOTS } from './data.js';
+// Stockage local (sur l'appareil, un espace par compte) + utilitaires de dates.
+import { DEFAULT_EXERCISES, DEFAULT_FOODS, DEFAULT_PLAN, PLAN_VERSION, TYPE_DEFAULTS, MEAL_SLOTS } from './data.js';
 
-const KEY = 'seche-app-v1';
+const BASE_KEY = 'seche-app-v1';
+// Sans compte : 'seche-app-v1' (compatibilité) ; avec compte : 'seche-app-v1:<uid>'.
+export const storageKey = (user) => (user ? `${BASE_KEY}:${user}` : BASE_KEY);
 
 // Identifiant stable pour les exercices / aliments par défaut : identique sur l'iPad et
 // l'iPhone, ce qui permet de fusionner les données des deux appareils.
@@ -32,8 +34,7 @@ export const longDate = (s) => parse(s).toLocaleDateString('fr-FR', { weekday: '
 export const shortDate = (s) => parse(s).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
 
 // ---- État initial ----
-function initialState() {
-  const exercises = DEFAULT_EXERCISES.map((e) => ({ id: exId(e.name), ...e, ...TYPE_DEFAULTS[e.type] }));
+function defaultPlan(exercises) {
   const byName = Object.fromEntries(exercises.map((e) => [e.name, e.id]));
   const plan = {};
   for (let d = 0; d < 7; d++) {
@@ -42,10 +43,17 @@ function initialState() {
       ? { active: true, name: p.name, items: p.exercises.map(([n, sets]) => ({ exId: byName[n], sets })) }
       : { active: false, name: '', items: [] };
   }
+  return plan;
+}
+
+export function initialState() {
+  const exercises = DEFAULT_EXERCISES.map((e) => ({ id: exId(e.name), ...e, ...TYPE_DEFAULTS[e.type] }));
+  const plan = defaultPlan(exercises);
   // Réglage spécifique : hip thrust, incrément plus grand (charges lourdes)
   for (const e of exercises) if (e.name.startsWith('Hip thrust')) e.increment = 5;
   return {
     version: 1,
+    planVersion: PLAN_VERSION,
     createdAt: today(),
     exercises,
     plan,
@@ -65,24 +73,38 @@ function initialState() {
   };
 }
 
-export function load() {
+export function normalize(s) {
+  migrateIds(s);
+  const base = initialState();
+  const out = { ...base, ...s, settings: { ...base.settings, ...s.settings, targets: { ...base.settings.targets, ...(s.settings || {}).targets } } };
+  // Nouveau programme par défaut (un jour de repos entre les séances jambes).
+  if ((s.planVersion || 1) < PLAN_VERSION) {
+    out.plan = defaultPlan(out.exercises);
+    out.planVersion = PLAN_VERSION;
+  }
+  return out;
+}
+
+export function load(user) {
   try {
-    const raw = localStorage.getItem(KEY);
-    if (raw) {
-      const s = JSON.parse(raw);
-      migrateIds(s);
-      const base = initialState();
-      return { ...base, ...s, settings: { ...base.settings, ...s.settings, targets: { ...base.settings.targets, ...(s.settings || {}).targets } } };
-    }
+    const raw = localStorage.getItem(storageKey(user));
+    if (raw) return normalize(JSON.parse(raw));
   } catch (e) {
     console.error('Lecture des données impossible', e);
   }
   return initialState();
 }
 
-export function save(state) {
+export function hasData(user) {
   try {
-    localStorage.setItem(KEY, JSON.stringify(state));
+    const s = JSON.parse(localStorage.getItem(storageKey(user)) || 'null');
+    return !!s && ((s.workouts || []).length + (s.weights || []).length + (s.cardio || []).length + (s.recipes || []).length + Object.keys(s.meals || {}).length) > 0;
+  } catch (e) { return false; }
+}
+
+export function save(state, user) {
+  try {
+    localStorage.setItem(storageKey(user), JSON.stringify(state));
     return true;
   } catch (e) {
     console.error('Sauvegarde impossible', e);
@@ -147,8 +169,58 @@ export function mergeStates(local, incoming) {
   return out;
 }
 
-export function reset() {
-  localStorage.removeItem(KEY);
+export function reset(user) {
+  localStorage.removeItem(storageKey(user));
+}
+
+// ---- Découpage en blocs pour la synchronisation en ligne ----
+// Chaque bloc reste petit (limite Firestore : 1 Mo par document).
+export function toChunks(s) {
+  const chunks = {
+    core: {
+      version: s.version, planVersion: s.planVersion, createdAt: s.createdAt, exercises: s.exercises, plan: s.plan,
+      foods: s.foods, recipes: s.recipes, mealSlots: s.mealSlots, settings: s.settings,
+    },
+    weights: { weights: s.weights },
+    cardio: { cardio: s.cardio },
+  };
+  for (const w of s.workouts) (chunks[`workouts-${w.date.slice(0, 4)}`] ||= { workouts: [] }).workouts.push(w);
+  for (const [d, items] of Object.entries(s.meals)) {
+    if (items.length) (chunks[`meals-${d.slice(0, 7)}`] ||= { meals: {} }).meals[d] = items;
+  }
+  return chunks;
+}
+
+// Remplace dans l'état le contenu d'un bloc (null = bloc supprimé).
+export function applyChunk(s, id, data) {
+  if (id === 'core') { if (data) Object.assign(s, data); return s; }
+  if (id === 'weights') { s.weights = data ? data.weights : []; return s; }
+  if (id === 'cardio') { s.cardio = data ? data.cardio : []; return s; }
+  if (id.startsWith('workouts-')) {
+    const y = id.slice(9);
+    s.workouts = s.workouts.filter((w) => w.date.slice(0, 4) !== y).concat(data ? data.workouts : []);
+    return s;
+  }
+  if (id.startsWith('meals-')) {
+    const m = id.slice(6);
+    for (const d of Object.keys(s.meals)) if (d.slice(0, 7) === m) delete s.meals[d];
+    if (data) Object.assign(s.meals, data.meals);
+  }
+  return s;
+}
+
+export function fromChunks(map) {
+  const s = initialState();
+  s.workouts = []; s.weights = []; s.cardio = []; s.meals = {};
+  for (const [id, data] of Object.entries(map)) applyChunk(s, id, data);
+  return normalize(s);
+}
+
+// Petit hachage (FNV-1a) pour savoir si un bloc a changé.
+export function hash(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(36) + str.length.toString(36);
 }
 
 export function validateImport(obj) {

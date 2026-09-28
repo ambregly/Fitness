@@ -91,22 +91,25 @@ export const CARDIO_TYPES = [
 ];
 
 // Planning de musculation : 0 = dimanche … 6 = samedi (convention JavaScript).
+// Un jour de repos entre chaque séance jambes : lundi fessiers, mercredi quadri,
+// samedi fessiers (vendredi = haut du corps uniquement).
+export const PLAN_VERSION = 2;
 export const DEFAULT_PLAN = {
-  1: { name: 'Lundi — Fessiers / Ischios', exercises: [
+  1: { name: 'Lundi — Fessiers', exercises: [
     ['Hip thrust machine', 4], ['Soulevé de terre roumain', 3], ['Fentes bulgares', 3],
-    ['Leg curl assis', 3], ['Abduction machine', 3],
+    ['Abduction machine', 3], ['Kickback poulie', 3],
   ] },
-  3: { name: 'Mercredi — Haut du corps', exercises: [
-    ['Tirage vertical', 3], ['Développé incliné haltères', 3], ['Tirage horizontal', 3],
-    ['Élévations latérales', 3], ['Curl haltères', 2], ['Extension triceps poulie', 2],
-  ] },
-  5: { name: 'Vendredi — Quadriceps / Fessiers', exercises: [
+  3: { name: 'Mercredi — Quadriceps / Pectoraux / Épaules', exercises: [
     ['Squat Smith machine', 4], ['Presse à cuisses', 3], ['Leg extension', 3],
-    ['Kickback poulie', 3], ['Mollets debout', 3],
+    ['Développé incliné haltères', 3], ['Développé épaules haltères', 3], ['Élévations latérales', 3],
   ] },
-  0: { name: 'Dimanche — Fessiers / Haut du corps', exercises: [
-    ['Hip thrust barre', 3], ['Tractions', 3], ['Développé épaules haltères', 3],
-    ['Extension de hanche 45°', 3], ['Crunch poulie', 3],
+  5: { name: 'Vendredi — Dos', exercises: [
+    ['Tractions', 3], ['Tirage vertical', 3], ['Rowing haltère', 3],
+    ['Tirage horizontal', 3], ['Pull-over poulie', 2], ['Face pull', 3],
+  ] },
+  6: { name: 'Samedi — Fessiers / Abdos', exercises: [
+    ['Hip thrust barre', 4], ['Leg curl assis', 3], ['Extension de hanche 45°', 3],
+    ['Abduction machine', 3], ['Crunch poulie', 3], ['Relevé de jambes', 3],
   ] },
 };
 

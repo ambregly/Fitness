@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Activer les comptes</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <style>
+    body { padding-bottom: 40px; }
+    .container { max-width: 760px; }
+    ol > li { margin: 10px 0; }
+    code, pre { font-family: ui-monospace, Menlo, monospace; font-size: 14px; background: var(--surface-2); border-radius: 6px; }
+    code { padding: 1px 5px; }
+    pre { padding: 12px; overflow-x: auto; white-space: pre; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+<main class="container">
+  <p><a href="../index.html">← Retour à l’app</a></p>
+  <h1>Activer les comptes (connexion)</h1>
+
+  <div class="card">
+    <h2>À quoi ça sert</h2>
+    <ul>
+      <li>Chaque personne crée son compte (e-mail + mot de passe).</li>
+      <li>Tout ce qui est saisi est sauvegardé en ligne : on retrouve tout son historique sur l’iPhone, l’iPad ou n’importe quel appareil, en se connectant.</li>
+      <li>Les appareils se synchronisent en temps réel ; hors ligne, l’app continue de marcher et envoie les changements au retour du réseau.</li>
+      <li>Chaque compte ne voit que ses propres données.</li>
+    </ul>
+    <p>Les comptes utilisent <strong>Firebase</strong> (Google), gratuit pour cet usage (offre « Spark », sans carte bancaire). Il faut le configurer une seule fois, environ 10 minutes.</p>
+  </div>
+
+  <div class="card">
+    <h2>Étapes</h2>
+    <ol>
+      <li>Ouvre <a href="https://console.firebase.google.com/" target="_blank" rel="noopener">console.firebase.google.com</a> avec un compte Google, puis <strong>Créer un projet</strong> (nom : par exemple <code>seche</code>). Google Analytics n’est pas nécessaire.</li>
+      <li>Menu <strong>Authentication</strong> → <strong>Commencer</strong> → onglet <strong>Sign-in method</strong> → <strong>E-mail/Mot de passe</strong> → activer → Enregistrer.</li>
+      <li>Toujours dans Authentication → <strong>Paramètres</strong> → <strong>Domaines autorisés</strong> → <strong>Ajouter un domaine</strong> : <code>ambregly.github.io</code>.</li>
+      <li>Menu <strong>Firestore Database</strong> → <strong>Créer une base de données</strong> → emplacement en Europe (par ex. <code>europe-west9</code>, Paris) → mode <strong>production</strong>.</li>
+      <li>Dans Firestore → onglet <strong>Règles</strong>, remplace tout le texte par celui-ci, puis <strong>Publier</strong> :
+<pre>rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{uid}/{document=**} {
+      allow read, write: if request.auth != null &amp;&amp; request.auth.uid == uid;
+    }
+  }
+}</pre>
+        Ces règles garantissent que chaque compte ne peut lire et modifier que ses propres données.</li>
+      <li>Roue dentée ⚙ → <strong>Paramètres du projet</strong> → section <strong>Vos applications</strong> → icône Web <code>&lt;/&gt;</code> → nom <code>Sèche</code> → <strong>Enregistrer l’application</strong> (Firebase Hosting n’est pas nécessaire). Firebase affiche un bloc <code>const firebaseConfig = { … }</code>.</li>
+      <li>Copie ce bloc dans le fichier <code>js/firebase-config.js</code> du dépôt GitHub (bouton crayon « Edit » sur github.com), à la place de <code>export const firebaseConfig = null;</code> :
+<pre>export const firebaseConfig = {
+  apiKey: "AIza…",
+  authDomain: "seche-xxxx.firebaseapp.com",
+  projectId: "seche-xxxx",
+  storageBucket: "seche-xxxx.firebasestorage.app",
+  messagingSenderId: "…",
+  appId: "1:…:web:…"
+};</pre>
+        Ou envoie simplement ce bloc à Claude, qui fera la modification. Ces valeurs ne sont pas secrètes : la sécurité vient des règles de l’étape 5.</li>
+      <li>Après la publication (1–2 minutes), ouvre l’app, touche l’icône <strong>personne</strong> en haut à droite → <strong>Créer un compte</strong>. Si des données avaient déjà été saisies sur l’appareil, l’app propose de les copier dans le compte.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2>Bon à savoir</h2>
+    <ul>
+      <li>Mot de passe oublié : bouton « Mot de passe oublié ? » sur l’écran de connexion (un e-mail est envoyé).</li>
+      <li>Plusieurs personnes sur le même iPad : se déconnecter, puis l’autre personne se connecte avec son compte.</li>
+      <li>Le journal des actions (bouton horloge) et « Annuler » fonctionnent aussi avec un compte : une annulation est synchronisée sur tous les appareils.</li>
+      <li>Limites gratuites Firebase (largement suffisantes) : 1 Go de données, 20 000 écritures et 50 000 lectures par jour.</li>
+    </ul>
+  </div>
+</main>
+</body>
+</html>

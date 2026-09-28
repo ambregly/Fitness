@@ -1,14 +1,159 @@
 import { CATEGORIES, TYPE_DEFAULTS, CARDIO_TYPES, NUTRIENTS } from './data.js';
 import {
-  load, save, reset, uid, iso, today, parse, addDays, dow, diffDays, mondayOf,
-  DAY_NAMES, DAY_SHORT, longDate, shortDate, validateImport, mergeStates,
+  load, save, reset, uid, iso, today, parse, addDays, dow, diffDays, mondayOf, normalize, hasData,
+  DAY_NAMES, DAY_SHORT, longDate, shortDate, validateImport, mergeStates, fromChunks, initialState,
 } from './store.js';
 import { exerciseHistory, recommend, sessionStats, stagnation, e1rm, fmtKg } from './progression.js';
-import { lineChart } from './charts.js';
+import { lineChart, barChart } from './charts.js';
+import * as journal from './journal.js';
+import * as cloud from './cloud.js';
 
-let S = load();
-const persist = () => save(S);
-persist(); // fixe la date de première ouverture (sert à repérer les jours manqués)
+// ---------- Compte + données ----------
+let account = null; // {uid, email, name} quand connecté
+let sync = null;
+let syncStatus = 'off';
+const userKey = () => (account ? account.uid : null);
+
+let S = load(null);
+let lastSaved = JSON.stringify(S);
+save(S, null); // fixe la date de première ouverture (sert à repérer les jours manqués)
+
+// Chaque modification est enregistrée sur l'appareil, ajoutée au journal
+// (pour pouvoir l'annuler) et envoyée au compte en ligne si connecté.
+let lastGroup = null;
+let lastGroupT = 0;
+let redoStack = [];
+function persist(label = 'Modification', opts = {}) {
+  const now = JSON.stringify(S);
+  if (now === lastSaved) return;
+  save(S, userKey());
+  const before = lastSaved;
+  lastSaved = now;
+  if (!opts.silent) {
+    redoStack = [];
+    const t = Date.now();
+    const p = opts.group && opts.group === lastGroup && t - lastGroupT < 90000
+      ? journal.touchLast(userKey())
+      : journal.addEntry(userKey(), label, before);
+    p.then(refreshUndo).catch((e) => console.warn('Journal', e));
+    lastGroup = opts.group || null;
+    lastGroupT = t;
+  }
+  if (sync) sync.schedule();
+}
+
+function restore(json) {
+  S = normalize(JSON.parse(json));
+  lastSaved = JSON.stringify(S);
+  lastGroup = null;
+  save(S, userKey());
+  if (sync) sync.schedule(0);
+  ui.recipeDraft = null;
+  if (ui.mealsView === 'recipeEdit') ui.mealsView = 'recipes';
+  render();
+}
+
+async function undo() {
+  const e = await journal.lastEntry(userKey());
+  if (!e) { toast('Rien à annuler.'); return; }
+  redoStack.push({ label: e.label, state: lastSaved });
+  await journal.removeFrom(userKey(), e.id);
+  restore(e.before);
+  toast(`Annulé : ${e.label}`, { act: 'redo', label: 'Rétablir' });
+}
+
+async function redo() {
+  const r = redoStack.pop();
+  if (!r) { toast('Rien à rétablir.'); return; }
+  await journal.addEntry(userKey(), r.label, lastSaved);
+  restore(r.state);
+  toast(`Rétabli : ${r.label}`);
+}
+
+async function revertTo(id) {
+  const e = await journal.get(id);
+  if (!e) return;
+  const entries = await journal.list(userKey());
+  const n = entries.filter((x) => x.id >= id).length;
+  if (!confirm(`Revenir à l’état d’avant « ${e.label} » ? ${n > 1 ? `Les ${n} dernières actions seront annulées.` : ''} (Tu pourras annuler ce retour en arrière.)`)) return;
+  await journal.removeFrom(userKey(), id);
+  await journal.addEntry(userKey(), `Retour en arrière (avant « ${e.label} »)`, lastSaved);
+  redoStack = [];
+  restore(e.before);
+  closeDialog();
+  toast('Retour en arrière effectué.', { act: 'undo', label: 'Annuler' });
+}
+
+function refreshUndo() {
+  journal.lastEntry(userKey()).then((e) => {
+    document.querySelectorAll('[data-act="undo"].head-btn').forEach((b) => {
+      b.disabled = !e;
+      b.title = e ? `Annuler : ${e.label}` : 'Rien à annuler';
+    });
+  }).catch(() => {});
+}
+
+// Passe d'un espace de données à un autre (connexion / déconnexion).
+function switchTo(state) {
+  S = state;
+  lastSaved = JSON.stringify(S);
+  lastGroup = null;
+  redoStack = [];
+  save(S, userKey());
+  render();
+}
+
+async function onAccount(u) {
+  if (sync) { sync.stop(); sync = null; }
+  if (!u) {
+    account = null;
+    syncStatus = 'off';
+    switchTo(load(null));
+    return;
+  }
+  account = u;
+  const uid = u.uid;
+  const cached = cloud.Sync.hasMeta(uid) && hasData(uid);
+  sync = new cloud.Sync(uid, {
+    getState: () => S,
+    onRemote: (state) => {
+      const before = lastSaved;
+      S = normalize(state);
+      lastSaved = JSON.stringify(S);
+      if (lastSaved === before) return;
+      save(S, uid);
+      journal.addEntry(uid, 'Mise à jour depuis un autre appareil', before).then(refreshUndo).catch(() => {});
+      lastGroup = null;
+      if (!document.activeElement || !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) render();
+    },
+    onStatus: (st) => { syncStatus = st; const el = $('#sync-status'); if (el) el.outerHTML = syncBadge(); },
+  });
+  if (cached) {
+    switchTo(load(uid));
+  } else {
+    // Premier passage sur cet appareil : on récupère le compte en ligne.
+    syncStatus = 'pending';
+    try {
+      const { map, hashes, empty } = await cloud.fetchAll(uid);
+      let state = empty ? initialState() : fromChunks(map);
+      sync.setSynced(empty ? {} : hashes);
+      const imported = localStorage.getItem('seche-local-imported') === uid;
+      if (hasData(null) && !imported && confirm(empty
+        ? 'Ton compte est vide. Y copier les données déjà saisies sur cet appareil ?'
+        : 'Ajouter à ton compte les données saisies sur cet appareil sans compte ?')) {
+        state = empty ? load(null) : mergeStates(state, load(null));
+        localStorage.setItem('seche-local-imported', uid);
+      }
+      switchTo(normalize(state));
+    } catch (e) {
+      console.warn(e);
+      toast('Impossible de récupérer le compte (connexion ?). Réessaie plus tard.');
+      syncStatus = 'error';
+      switchTo(load(uid));
+    }
+  }
+  if (account && account.uid === uid) sync.start();
+}
 
 const ui = {
   tab: 'sport',
@@ -18,7 +163,7 @@ const ui = {
   workoutDate: today(),
   mealDate: today(),
   progEx: null,
-  weightRange: 90,
+  periods: { weight: { span: '3m', anchor: today() }, kcal: { span: 'week', anchor: today() } },
   histFilter: 'all',
   histDays: 30,
   calMonth: today().slice(0, 7),
@@ -36,12 +181,49 @@ const foodById = (id) => S.foods.find((f) => f.id === id);
 const recipeById = (id) => S.recipes.find((r) => r.id === id);
 const byName = (a, b) => a.name.localeCompare(b.name, 'fr');
 
-function toast(msg) {
+function toast(msg, action) {
   const t = $('#toast');
-  t.textContent = msg;
+  t.innerHTML = `<span>${h(msg)}</span>${action ? `<button data-act="${action.act}">${h(action.label)}</button>` : ''}`;
   t.hidden = false;
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => { t.hidden = true; }, 2600);
+  toast._t = setTimeout(() => { t.hidden = true; }, action ? 5000 : 2600);
+}
+
+// ---------- En-tête : annuler, journal, compte ----------
+const ICONS = {
+  undo: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>',
+  journal: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  user: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>',
+};
+function pageHead(title) {
+  const initial = account ? (account.name || account.email || '?').trim()[0].toUpperCase() : '';
+  return `<header class="page-head"><div><h1>${title}</h1><p class="date">${longDate(today())}</p></div>
+    <div class="head-actions">
+      <button class="head-btn" data-act="undo" aria-label="Annuler la dernière action" title="Annuler">${ICONS.undo}</button>
+      <button class="head-btn" data-act="journal" aria-label="Journal des actions" title="Journal des actions">${ICONS.journal}</button>
+      <button class="head-btn account ${account ? 'on' : ''}" data-act="openSettings" aria-label="Compte et réglages" title="${account ? h(account.email) : 'Compte et réglages'}">${account ? `<span class="avatar">${h(initial)}</span>` : ICONS.user}</button>
+    </div></header>`;
+}
+
+function syncBadge() {
+  const m = { ok: ['ok', 'Synchronisé'], pending: ['pending', 'Synchronisation…'], offline: ['offline', 'Hors ligne — envoi dès le retour du réseau'], error: ['error', 'Erreur de synchronisation'], off: ['offline', 'Non synchronisé'] }[syncStatus] || ['offline', ''];
+  return `<span id="sync-status" class="sync ${m[0]}"><i></i>${m[1]}</span>`;
+}
+
+async function openJournal() {
+  const entries = await journal.list(userKey(), 150);
+  const when = (t) => {
+    const d = new Date(t);
+    const min = Math.round((Date.now() - t) / 60000);
+    if (min < 1) return 'à l’instant';
+    if (min < 60) return `il y a ${min} min`;
+    return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }) + ' ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  };
+  openDialog(`<h2>Journal des actions</h2>
+    <p class="muted small">Chaque modification est enregistrée ici. « Revenir avant » remet l’app dans l’état où elle était juste avant cette action (et ce retour en arrière peut lui-même être annulé).</p>
+    <div class="row-actions"><button class="btn primary small" data-act="undo" ${entries.length ? '' : 'disabled'}>↶ Annuler la dernière action</button>${redoStack.length ? `<button class="btn ghost small" data-act="redo">↷ Rétablir « ${h(redoStack[redoStack.length - 1].label)} »</button>` : ''}</div>
+    <ul class="list journal">${entries.map((e) => `<li><div><strong>${h(e.label)}</strong><br><span class="muted small">${when(e.t)}</span></div><button class="btn ghost small" data-act="revertTo" data-id="${e.id}">Revenir avant</button></li>`).join('') || '<li class="empty">Aucune action pour l’instant.</li>'}</ul>
+    <div class="row-actions"><button class="btn" data-act="closeDialog">Fermer</button></div>`);
 }
 
 // ---------- Nutrition ----------
@@ -169,6 +351,7 @@ function render() {
   const act = main.querySelector('.subnav .active');
   if (act) act.parentElement.scrollLeft = act.offsetLeft - (act.parentElement.clientWidth - act.offsetWidth) / 2;
   afterRender();
+  refreshUndo();
 }
 
 function subnav(tab, items) {
@@ -180,7 +363,7 @@ function subnav(tab, items) {
 function renderSport() {
   const nav = subnav('sport', [['today', 'Séance'], ['cardio', 'Cardio'], ['plan', 'Programme'], ['bank', 'Exercices']]);
   const v = { today: sportToday, cardio: sportCardio, plan: sportPlan, bank: sportBank }[ui.sportView]();
-  return `<header class="page-head"><h1>Sport</h1><p class="date">${longDate(today())}</p></header>${nav}${v}`;
+  return `${pageHead('Sport')}${nav}${v}`;
 }
 
 function historyBefore(exId, date) {
@@ -293,7 +476,7 @@ function sportBank() {
 function renderMeals() {
   const nav = subnav('meals', [['day', 'Journée'], ['recipes', 'Recettes'], ['foods', 'Aliments']]);
   const v = { day: mealsDay, recipes: mealsRecipes, recipeEdit: recipeEditor, foods: mealsFoods }[ui.mealsView]();
-  return `<header class="page-head"><h1>Repas</h1><p class="date">${longDate(today())}</p></header>${nav}${v}`;
+  return `${pageHead('Repas')}${nav}${v}`;
 }
 
 function progressBars(tot) {
@@ -382,56 +565,116 @@ function mealsFoods() {
 
 // ================= SUIVI =================
 function renderSuivi() {
-  const nav = subnav('suivi', [['poids', 'Poids'], ['prog', 'Progression'], ['hist', 'Historique'], ['cal', 'Calendrier'], ['settings', 'Réglages']]);
-  const v = { poids: suiviWeight, prog: suiviProg, hist: suiviHistory, cal: suiviCal, settings: suiviSettings }[ui.suiviView]();
-  return `<header class="page-head"><h1>Suivi</h1><p class="date">${longDate(today())}</p></header>${nav}${v}`;
+  const nav = subnav('suivi', [['poids', 'Poids'], ['kcal', 'Calories'], ['prog', 'Progression'], ['hist', 'Historique'], ['cal', 'Calendrier']]);
+  const v = { poids: suiviWeight, kcal: suiviKcal, prog: suiviProg, hist: suiviHistory, cal: suiviCal, settings: suiviSettings }[ui.suiviView]();
+  return `${pageHead('Suivi')}${ui.suiviView === 'settings' ? '' : nav}${v}`;
 }
 
-function movingAvg(weights) {
-  const sorted = [...weights].sort((a, b) => a.date.localeCompare(b.date));
-  return sorted.map((w) => {
-    const win = sorted.filter((x) => x.date <= w.date && x.date >= addDays(w.date, -6));
-    return { x: w.date, y: win.reduce((a, x) => a + num(x.kg), 0) / win.length };
-  });
+// ---------- Périodes : semaine / 3 mois / 6 mois / 1 an, avec défilement ----------
+const SPANS = [['week', 'Semaine'], ['3m', '3 mois'], ['6m', '6 mois'], ['1y', '1 an']];
+const MONTHS = { '3m': 3, '6m': 6, '1y': 12 };
+const monthStart = (d) => d.slice(0, 8) + '01';
+function addMonths(d, n) { const x = parse(monthStart(d)); x.setMonth(x.getMonth() + n); return iso(x); }
+function periodRange(p) {
+  if (p.span === 'week') {
+    const from = mondayOf(p.anchor);
+    const to = addDays(from, 6);
+    const sameMonth = from.slice(0, 7) === to.slice(0, 7);
+    const label = `${parse(from).toLocaleDateString('fr-FR', sameMonth ? { day: 'numeric' } : { day: 'numeric', month: 'short' })} – ${parse(to).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+    return { from, to, label };
+  }
+  const n = MONTHS[p.span];
+  const to = addDays(addMonths(p.anchor, 1), -1);
+  const from = addMonths(p.anchor, -(n - 1));
+  const label = `${parse(from).toLocaleDateString('fr-FR', { month: 'short', year: from.slice(0, 4) === to.slice(0, 4) ? undefined : 'numeric' })} – ${parse(to).toLocaleDateString('fr-FR', { month: 'short', year: 'numeric' })}`;
+  return { from, to, label };
 }
-
-function weightStats() {
-  const sorted = [...S.weights].sort((a, b) => a.date.localeCompare(b.date));
-  if (sorted.length < 2) return null;
-  const last = sorted[sorted.length - 1].date;
-  const avg = (from, to) => { const l = sorted.filter((w) => w.date > from && w.date <= to); return l.length ? l.reduce((a, w) => a + num(w.kg), 0) / l.length : null; };
-  const a1 = avg(addDays(last, -7), last);
-  const a0 = avg(addDays(last, -14), addDays(last, -7));
-  const first = num(sorted[0].kg);
-  return { a1, a0, delta: a0 && a1 ? a1 - a0 : null, pct: a0 && a1 ? ((a1 - a0) / a0) * 100 : null, total: num(sorted[sorted.length - 1].kg) - first, since: sorted[0].date };
+function shiftPeriod(key, dir) {
+  const p = ui.periods[key];
+  p.anchor = p.span === 'week' ? addDays(p.anchor, 7 * dir) : addMonths(p.anchor, dir);
+  render();
+}
+function periodNav(key) {
+  const p = ui.periods[key];
+  const r = periodRange(p);
+  const isCurrent = today() >= r.from && today() <= r.to;
+  return `<div class="period"><div class="chips">${SPANS.map(([id, l]) => `<button class="chip ${p.span === id ? 'active' : ''}" data-act="periodSpan" data-k="${key}" data-span="${id}">${l}</button>`).join('')}</div>
+    <div class="period-nav"><button class="icon-btn" data-act="periodShift" data-k="${key}" data-dir="-1" aria-label="Période précédente">‹</button>
+    <span class="period-label">${r.label}</span>
+    <button class="icon-btn" data-act="periodShift" data-k="${key}" data-dir="1" aria-label="Période suivante" ${isCurrent ? 'disabled' : ''}>›</button>
+    ${isCurrent ? '' : `<button class="btn ghost small" data-act="periodToday" data-k="${key}">Aujourd’hui</button>`}</div></div>`;
 }
 
 function suiviWeight() {
   const t = today();
-  const st = weightStats();
-  let verdict = '';
-  if (st && st.pct != null) {
-    const p = -st.pct;
-    const [cls, txt] = p > 1 ? ['warn', 'Perte rapide (> 1 %/sem) : risque de perdre du muscle, envisage de remonter un peu les calories.']
-      : p >= 0.5 ? ['good', 'Dans la cible recommandée (0,5–1 % du poids par semaine).']
-        : p > 0 ? ['info', 'Perte lente (< 0,5 %/sem) : c’est ok pour préserver le muscle ; baisse légèrement les calories si ça stagne 2–3 semaines.']
-          : ['info', 'Pas de baisse sur la semaine : regarde la tendance sur 2–3 semaines avant d’ajuster (eau, cycle, sel…).'];
-    verdict = `<div class="alert ${cls}"><div>${txt}</div></div>`;
+  const r = periodRange(ui.periods.weight);
+  const all = [...S.weights].sort((a, b) => a.date.localeCompare(b.date));
+  const inP = all.filter((w) => w.date >= r.from && w.date <= r.to);
+  let stats = '';
+  if (inP.length) {
+    const first = inP[0];
+    const last = inP[inP.length - 1];
+    const delta = num(last.kg) - num(first.kg);
+    const days = diffDays(first.date, last.date);
+    const perWeek = days >= 7 ? (delta / days) * 7 : null;
+    const pctWeek = perWeek == null ? null : (perWeek / num(first.kg)) * 100;
+    stats = `<div class="stats">
+      <div class="stat"><span class="label">Dernière pesée</span><span class="value">${fmt(num(last.kg))} kg</span><span class="sub">${shortDate(last.date)}</span></div>
+      <div class="stat"><span class="label">Sur la période</span><span class="value">${inP.length > 1 ? (delta > 0 ? '+' : '') + fmt(delta) + ' kg' : '–'}</span><span class="sub">${inP.length > 1 ? `du ${shortDate(first.date)} au ${shortDate(last.date)}` : '1 seule pesée'}</span></div>
+      <div class="stat"><span class="label">Rythme</span><span class="value">${perWeek == null ? '–' : (perWeek > 0 ? '+' : '') + fmt(perWeek, 2) + ' kg/sem'}</span><span class="sub">${pctWeek == null ? 'au moins 7 jours d’écart' : (pctWeek > 0 ? '+' : '') + fmt(pctWeek, 2) + ' % par semaine'}</span></div></div>`;
+    if (pctWeek != null) {
+      const p = -pctWeek;
+      const [cls, txt] = p > 1 ? ['warn', 'Perte rapide (> 1 %/sem) : risque de perdre du muscle, envisage de remonter un peu les calories.']
+        : p >= 0.5 ? ['good', 'Dans la cible recommandée (0,5–1 % du poids par semaine).']
+          : p > 0 ? ['info', 'Perte lente (< 0,5 %/sem) : ok pour préserver le muscle ; baisse légèrement les calories si ça stagne 2–3 semaines.']
+            : ['info', 'Pas de baisse sur cette période : regarde sur 2–3 semaines avant d’ajuster (eau, cycle, sel…).'];
+      stats += `<div class="alert ${cls}"><div>${txt}</div></div>`;
+    }
   }
-  const entries = [...S.weights].sort((a, b) => b.date.localeCompare(a.date));
+  const rows = [...inP].reverse().slice(0, ui.weightRows || 14).map((w) => {
+    const prev = all[all.indexOf(w) - 1];
+    const d = prev ? num(w.kg) - num(prev.kg) : null;
+    return `<li><div><strong>${fmt(num(w.kg))} kg</strong> ${d == null ? '' : `<span class="delta ${d < 0 ? 'down' : d > 0 ? 'up' : ''}">${d > 0 ? '+' : ''}${fmt(d)}</span>`}<br><span class="muted small cap">${longDate(w.date)}</span></div><button class="icon-btn" data-act="weightDel" data-date="${w.date}" aria-label="Supprimer">×</button></li>`;
+  }).join('');
   return `<div class="card"><h2>Pesée</h2><form class="grid-form" data-form="weight">
       <label class="field"><span>Date</span><input type="date" name="date" value="${t}" max="${t}"></label>
-      <label class="field"><span>Poids (kg)</span><input name="kg" inputmode="decimal" required placeholder="${entries[0] ? String(entries[0].kg).replace('.', ',') : '60,0'}"></label>
-      <button class="btn primary" type="submit">Enregistrer</button></form>
-    <p class="muted small">Conseil : pèse-toi le matin à jeun, après un passage aux toilettes. Seule la moyenne sur 7 jours compte vraiment.</p></div>
-  ${st ? `<div class="stats">
-    <div class="stat"><span class="label">Moyenne 7 j</span><span class="value">${fmt(st.a1)} kg</span></div>
-    <div class="stat"><span class="label">Évolution / semaine</span><span class="value">${st.delta == null ? '–' : (st.delta > 0 ? '+' : '') + fmt(st.delta, 2) + ' kg'}</span><span class="sub">${st.pct == null ? '' : (st.pct > 0 ? '+' : '') + fmt(st.pct, 2) + ' %'}</span></div>
-    <div class="stat"><span class="label">Depuis le ${shortDate(st.since)}</span><span class="value">${(st.total > 0 ? '+' : '') + fmt(st.total)} kg</span></div></div>${verdict}` : ''}
-  <div class="card"><div class="ex-head"><h2>Courbe de poids</h2><div class="chips">${[[30, '1 mois'], [90, '3 mois'], [180, '6 mois'], [0, 'Tout']].map(([n, l]) => `<button class="chip ${ui.weightRange === n ? 'active' : ''}" data-act="weightRange" data-n="${n}">${l}</button>`).join('')}</div></div>
-    <div class="legend"><span><i style="background:var(--series-1)"></i>Pesée</span><span><i class="line" style="background:var(--series-2)"></i>Moyenne 7 jours</span></div>
-    <div id="weight-chart" class="chart-box"></div></div>
-  <div class="card"><h3>Historique</h3><ul class="list">${entries.slice(0, 60).map((w) => `<li><div><strong>${fmt(num(w.kg))} kg</strong><br><span class="muted small">${longDate(w.date)}</span></div><button class="icon-btn" data-act="weightDel" data-date="${w.date}" aria-label="Supprimer">×</button></li>`).join('') || '<li class="empty">Aucune pesée.</li>'}</ul></div>`;
+      <label class="field"><span>Poids (kg)</span><input name="kg" inputmode="decimal" required placeholder="${all.length ? String(all[all.length - 1].kg).replace('.', ',') : '60,0'}"></label>
+      <button class="btn primary wide-phone" type="submit">Enregistrer</button></form>
+    <p class="muted small">Conseil : pèse-toi le matin à jeun, après un passage aux toilettes.</p></div>
+  <div class="card"><h2>Courbe de poids</h2>${periodNav('weight')}
+    <div id="weight-chart" class="chart-box" data-swipe="weight"></div></div>
+  ${stats}
+  <div class="card"><h3>Pesées de la période <span class="muted small">(${inP.length})</span></h3><ul class="list">${rows || '<li class="empty">Aucune pesée sur cette période.</li>'}</ul>
+    ${inP.length > (ui.weightRows || 14) ? `<button class="btn ghost small" data-act="weightMore">Afficher tout (${inP.length})</button>` : ''}</div>`;
+}
+
+// ---------- Calories ingérées jour après jour ----------
+function suiviKcal() {
+  const r = periodRange(ui.periods.kcal);
+  const target = num(S.settings.targets.kcal);
+  const days = [];
+  for (let d = r.from; d <= r.to; d = addDays(d, 1)) {
+    const has = (S.meals[d] || []).length > 0;
+    days.push({ d, has, tot: has ? dayTotals(d) : null });
+  }
+  const logged = days.filter((x) => x.has);
+  const inTarget = logged.filter((x) => Math.abs(x.tot.kcal - target) <= target * 0.1).length;
+  const over = logged.filter((x) => x.tot.kcal > target * 1.1).length;
+  const cardioKcal = (d) => cardioOn(d).reduce((a, c) => a + num(c.kcal), 0);
+  const rows = [...days].reverse().filter((x) => x.has || x.d <= today()).map((x) => {
+    if (!x.has) return `<tr class="nodata"><td class="cap">${parse(x.d).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' })}</td><td colspan="6" class="muted">non saisi</td></tr>`;
+    const diff = x.tot.kcal - target;
+    const c = cardioKcal(x.d);
+    return `<tr data-act="gotoMeals" data-date="${x.d}"><td class="cap">${parse(x.d).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' })}</td><td><strong>${fmt(x.tot.kcal, 0)}</strong></td><td class="${Math.abs(diff) <= target * 0.1 ? 'ok' : diff > 0 ? 'over' : 'under'}">${diff > 0 ? '+' : ''}${fmt(diff, 0)}</td><td>${fmt(x.tot.prot, 0)}</td><td>${fmt(x.tot.gluc, 0)}</td><td>${fmt(x.tot.lip, 0)}</td><td class="muted">${c ? '−' + fmt(c, 0) : ''}</td></tr>`;
+  }).join('');
+  return `<div class="card"><h2>Calories ingérées</h2>${periodNav('kcal')}
+    <div class="legend"><span><i style="background:var(--series-1)"></i>kcal du jour</span><span><i class="line dashed"></i>objectif ${fmt(target, 0)} kcal</span></div>
+    <div id="kcal-chart" class="chart-box" data-swipe="kcal"></div></div>
+  <div class="stats"><div class="stat"><span class="label">Jours saisis</span><span class="value">${logged.length}</span><span class="sub">sur ${days.filter((x) => x.d <= today()).length} jours</span></div>
+    <div class="stat"><span class="label">Dans l’objectif (±10 %)</span><span class="value">${inTarget}</span></div>
+    <div class="stat"><span class="label">Au-dessus</span><span class="value">${over}</span></div></div>
+  <div class="card"><h3>Jour par jour</h3><table class="hist kcal-table clickable"><thead><tr><th>Jour</th><th>kcal</th><th>Écart</th><th>P</th><th>G</th><th>L</th><th>Cardio</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="empty">Aucun jour.</td></tr>'}</tbody></table>
+  <p class="muted small">Touche un jour pour ouvrir ses repas. « Cardio » = dépense estimée des séances de cardio ce jour-là.</p></div>`;
 }
 
 function suiviProg() {
@@ -531,9 +774,8 @@ function csvFile(kind) {
     rows.push(['date', 'activite', 'minutes', 'km', 'fc_moy', 'kcal', 'notes']);
     for (const c of [...S.cardio].sort((a, b) => a.date.localeCompare(b.date))) rows.push([c.date, (CARDIO_TYPES.find((x) => x.id === c.type) || { name: c.type }).name, c.minutes, c.km, c.hr, c.kcal, c.notes]);
   } else if (kind === 'poids') {
-    rows.push(['date', 'poids_kg', 'moyenne_7j']);
-    const avg = Object.fromEntries(movingAvg(S.weights).map((p) => [p.x, Math.round(p.y * 100) / 100]));
-    for (const w of [...S.weights].sort((a, b) => a.date.localeCompare(b.date))) rows.push([w.date, num(w.kg), avg[w.date]]);
+    rows.push(['date', 'poids_kg']);
+    for (const w of [...S.weights].sort((a, b) => a.date.localeCompare(b.date))) rows.push([w.date, num(w.kg)]);
   } else {
     rows.push(['date', 'repas', 'type', 'nom', 'quantite', 'unite', ...NUTRIENTS.map((n) => n.key)]);
     for (const d of Object.keys(S.meals).sort()) {
@@ -585,10 +827,32 @@ function suiviCal() {
   <div class="stats"><div class="stat"><span class="label">Séances faites</span><span class="value">${stats.done}</span></div><div class="stat"><span class="label">Séances manquées</span><span class="value">${stats.missed}</span></div><div class="stat"><span class="label">Cardio</span><span class="value">${stats.cardio}</span></div><div class="stat"><span class="label">Pesées</span><span class="value">${stats.weigh}</span></div></div>`;
 }
 
+function accountCard() {
+  if (!cloud.configured()) {
+    return `<div class="card"><h2>Compte</h2><p>La connexion n’est pas encore activée : tes données sont enregistrées uniquement sur cet appareil.</p>
+      <p class="muted small">Pour retrouver ton compte sur tous tes appareils (et permettre à plusieurs personnes d’avoir chacune leur compte), il faut relier l’app à un projet Firebase gratuit : <a href="docs/compte.html" target="_blank" rel="noopener">voir le guide (10 minutes)</a>.</p></div>`;
+  }
+  if (account) {
+    return `<div class="card"><h2>Compte</h2><p>Connecté·e : <strong>${h(account.name || account.email)}</strong>${account.name ? ` <span class="muted small">${h(account.email)}</span>` : ''}</p>
+      <p>${syncBadge()}</p><p class="muted small">Tout ce que tu saisis est enregistré dans ton compte : connecte-toi avec le même e-mail sur l’iPhone, l’iPad ou un autre appareil pour retrouver tout ton historique.</p>
+      <div class="row-actions"><button class="btn ghost" data-act="signOut">Se déconnecter</button></div></div>`;
+  }
+  const signup = ui.authMode === 'signup';
+  return `<div class="card"><h2>${signup ? 'Créer un compte' : 'Se connecter'}</h2>
+    <p class="muted small">Un compte par personne : tes données sont sauvegardées en ligne et tu les retrouves sur n’importe quel appareil.</p>
+    <form class="grid-form" data-form="auth">
+      ${signup ? '<label class="field wide"><span>Prénom</span><input name="name" autocomplete="given-name"></label>' : ''}
+      <label class="field"><span>E-mail</span><input name="email" type="email" autocomplete="email" required></label>
+      <label class="field"><span>Mot de passe</span><input name="password" type="password" autocomplete="${signup ? 'new-password' : 'current-password'}" minlength="6" required></label>
+      <div class="row-actions wide wrap"><button class="btn primary" type="submit">${signup ? 'Créer mon compte' : 'Se connecter'}</button>
+      ${signup ? '<button class="btn ghost" type="button" data-act="authMode" data-mode="login">J’ai déjà un compte</button>' : '<button class="btn ghost" type="button" data-act="authMode" data-mode="signup">Créer un compte</button><button class="linklike" type="button" data-act="resetPw">Mot de passe oublié ?</button>'}</div>
+    </form></div>`;
+}
+
 function suiviSettings() {
   const st = S.settings;
   const lastW = [...S.weights].sort((a, b) => b.date.localeCompare(a.date))[0];
-  return `<div class="card"><h2>Objectifs nutritionnels quotidiens</h2><div class="grid-form">
+  return `<div class="toolbar"><button class="btn ghost small" data-act="settingsBack">‹ Retour au suivi</button></div>${accountCard()}<div class="card"><h2>Objectifs nutritionnels quotidiens</h2><div class="grid-form">
     ${[['kcal', 'Calories (kcal)'], ['prot', 'Protéines (g)'], ['gluc', 'Glucides (g)'], ['lip', 'Lipides (g)'], ['fib', 'Fibres (g)']].map(([k, l]) => `<label class="field"><span>${l}</span><input inputmode="decimal" data-input="target" data-k="${k}" value="${st.targets[k]}"></label>`).join('')}</div></div>
   <div class="card"><h2>Calculateur de sèche</h2>
     <div class="grid-form">
@@ -611,15 +875,37 @@ function suiviSettings() {
 function afterRender() {
   const wc = $('#weight-chart');
   if (wc) {
-    let pts = [...S.weights].sort((a, b) => a.date.localeCompare(b.date));
-    const avg = movingAvg(pts);
-    const from = ui.weightRange ? addDays(today(), -ui.weightRange) : '0000';
-    pts = pts.filter((p) => p.date >= from);
-    lineChart(wc, [
-      { name: 'Pesée', color: 'var(--series-1)', points: pts.map((p) => ({ x: p.date, y: num(p.kg) })), dots: true, line: false },
-      { name: 'Moyenne 7 j', color: 'var(--series-2)', points: avg.filter((p) => p.x >= from), dots: false },
-    ], { unit: 'kg' });
+    const r = periodRange(ui.periods.weight);
+    const pts = S.weights.filter((p) => p.date >= r.from && p.date <= r.to).map((p) => ({ x: p.date, y: num(p.kg) }));
+    lineChart(wc, [{ name: 'Poids', color: 'var(--series-1)', points: pts, dots: true }], { unit: 'kg', xMin: r.from, xMax: r.to, empty: 'Aucune pesée sur cette période.' });
   }
+  const kc = $('#kcal-chart');
+  if (kc) {
+    const r = periodRange(ui.periods.kcal);
+    const days = [];
+    for (let d = r.from; d <= r.to; d = addDays(d, 1)) {
+      if (!(S.meals[d] || []).length) continue;
+      const t = dayTotals(d);
+      days.push({ x: d, y: t.kcal, tip: `P ${fmt(t.prot, 0)} g · G ${fmt(t.gluc, 0)} g · L ${fmt(t.lip, 0)} g` });
+    }
+    barChart(kc, days, { target: num(S.settings.targets.kcal), xMin: r.from, xMax: r.to, empty: 'Aucun repas saisi sur cette période.' });
+  }
+  // Glisser le doigt sur un graphique = période précédente / suivante
+  document.querySelectorAll('[data-swipe]').forEach((box) => {
+    let x0 = null; let y0 = null;
+    box.addEventListener('touchstart', (e) => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
+    box.addEventListener('touchend', (e) => {
+      if (x0 == null) return;
+      const dx = e.changedTouches[0].clientX - x0;
+      const dy = e.changedTouches[0].clientY - y0;
+      x0 = null;
+      if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        const r = periodRange(ui.periods[box.dataset.swipe]);
+        if (dx < 0 && today() <= r.to) return; // pas de futur
+        shiftPeriod(box.dataset.swipe, dx < 0 ? 1 : -1);
+      }
+    });
+  });
   const pc = $('#prog-chart');
   if (pc && ui.progEx) {
     const hist = exerciseHistory(S.workouts, ui.progEx);
@@ -747,7 +1033,7 @@ function newWorkout(date, day) {
     w.entries.push({ exId: it.exId, sets: Array.from({ length: Math.max(1, num(it.sets)) }, () => ({ w: '', r: '', done: false })) });
   }
   S.workouts.push(w);
-  persist();
+  persist('Séance commencée');
   return w;
 }
 
@@ -756,6 +1042,22 @@ const actions = {
   view(el) { ui[el.dataset.tab + 'View'] = el.dataset.view; render(); },
   gotoMeals(el) { ui.tab = 'meals'; ui.mealsView = 'day'; ui.mealDate = el.dataset.date; render(); window.scrollTo(0, 0); },
   closeDialog: closeDialog,
+  undo() { closeDialog(); undo(); },
+  redo() { closeDialog(); redo(); },
+  journal() { openJournal(); },
+  revertTo(el) { revertTo(+el.dataset.id); },
+  openSettings() { ui.tab = 'suivi'; ui.suiviView = 'settings'; render(); window.scrollTo(0, 0); },
+  settingsBack() { ui.suiviView = 'poids'; render(); },
+  authMode(el) { ui.authMode = el.dataset.mode; render(); },
+  async signOut() {
+    if (!confirm('Se déconnecter ? Tes données restent dans ton compte ; l’app repassera sur les données de cet appareil sans compte.')) return;
+    await cloud.signOutUser();
+  },
+  async resetPw() {
+    const email = ($('[data-form="auth"] [name="email"]') || {}).value;
+    if (!email) { toast('Indique ton e-mail d’abord.'); return; }
+    try { await cloud.resetPassword(email); toast('E-mail de réinitialisation envoyé.'); } catch (e) { toast(cloud.errorText(e)); }
+  },
   // Sport
   pickWorkoutDate(el) { ui.workoutDate = el.dataset.date; ui.tab = 'sport'; ui.sportView = 'today'; render(); },
   startWorkout(el) { newWorkout(ui.workoutDate, el.dataset.day); render(); },
@@ -773,35 +1075,35 @@ const actions = {
       if (!s.w || !s.r) { toast('Indique le poids et les répétitions.'); return; }
     }
     s.done = !s.done;
-    persist(); render();
+    persist('Série validée / modifiée'); render();
   },
   addSet(el) {
     const en = workoutOn(ui.workoutDate).entries[+el.dataset.e];
     const last = en.sets[en.sets.length - 1];
     en.sets.push({ w: last ? last.w : '', r: '', done: false });
-    persist(); render();
+    persist('Série ajoutée'); render();
   },
-  delSet(el) { const en = workoutOn(ui.workoutDate).entries[+el.dataset.e]; en.sets.splice(+el.dataset.s, 1); persist(); render(); },
-  delEntry(el) { if (!confirm('Retirer cet exercice de la séance ?')) return; workoutOn(ui.workoutDate).entries.splice(+el.dataset.e, 1); persist(); render(); },
+  delSet(el) { const en = workoutOn(ui.workoutDate).entries[+el.dataset.e]; en.sets.splice(+el.dataset.s, 1); persist('Série supprimée'); render(); },
+  delEntry(el) { if (!confirm('Retirer cet exercice de la séance ?')) return; workoutOn(ui.workoutDate).entries.splice(+el.dataset.e, 1); persist('Exercice retiré de la séance'); render(); },
   addExToWorkout() {
-    openExercisePicker((id) => { workoutOn(ui.workoutDate).entries.push({ exId: id, sets: [0, 1, 2].map(() => ({ w: '', r: '', done: false })) }); persist(); render(); });
+    openExercisePicker((id) => { workoutOn(ui.workoutDate).entries.push({ exId: id, sets: [0, 1, 2].map(() => ({ w: '', r: '', done: false })) }); persist('Exercice ajouté à la séance'); render(); });
   },
-  deleteWorkout() { if (!confirm('Supprimer toute la séance de ce jour ?')) return; S.workouts = S.workouts.filter((w) => w.date !== ui.workoutDate); persist(); render(); },
-  delCardio(el) { if (!confirm('Supprimer cette séance de cardio ?')) return; S.cardio = S.cardio.filter((c) => c.id !== el.dataset.id); persist(); render(); },
+  deleteWorkout() { if (!confirm('Supprimer toute la séance de ce jour ?')) return; S.workouts = S.workouts.filter((w) => w.date !== ui.workoutDate); persist('Séance supprimée'); render(); },
+  delCardio(el) { if (!confirm('Supprimer cette séance de cardio ?')) return; S.cardio = S.cardio.filter((c) => c.id !== el.dataset.id); persist('Cardio supprimé'); render(); },
   planMove(el) {
     const items = S.plan[el.dataset.d].items; const i = +el.dataset.i; const j = i + +el.dataset.dir;
     if (j < 0 || j >= items.length) return;
-    [items[i], items[j]] = [items[j], items[i]]; persist(); render();
+    [items[i], items[j]] = [items[j], items[i]]; persist('Programme : ordre modifié'); render();
   },
-  planDel(el) { S.plan[el.dataset.d].items.splice(+el.dataset.i, 1); persist(); render(); },
-  planAddEx(el) { const d = el.dataset.d; openExercisePicker((id) => { S.plan[d].items.push({ exId: id, sets: 3 }); persist(); render(); }); },
+  planDel(el) { S.plan[el.dataset.d].items.splice(+el.dataset.i, 1); persist('Programme : exercice retiré'); render(); },
+  planAddEx(el) { const d = el.dataset.d; openExercisePicker((id) => { S.plan[d].items.push({ exId: id, sets: 3 }); persist('Programme : exercice ajouté'); render(); }); },
   exNew(el) { openExerciseForm(null, el.dataset.fromPicker); },
   exEdit(el) { openExerciseForm(exById(el.dataset.id)); },
   exDel(el) {
     if (!confirm('Supprimer cet exercice de la banque ?')) return;
     S.exercises = S.exercises.filter((e) => e.id !== el.dataset.id);
     for (const p of Object.values(S.plan)) p.items = p.items.filter((i) => i.exId !== el.dataset.id);
-    persist(); closeDialog(); render();
+    persist('Exercice supprimé de la banque'); closeDialog(); render();
   },
   pickCat(el) { ui.pickCat = el.dataset.c; renderPicker(); },
   pickEx(el) { const cb = pickerCb; closeDialog(); if (cb) cb(el.dataset.id); },
@@ -815,25 +1117,25 @@ const actions = {
     if (!qty) return;
     const unit = el.dataset.kind === 'food' ? 'g' : $(`#mpu-${id}`).value;
     (S.meals[ui.mealDate] ||= []).push({ id: uid(), slot: mealSlot, kind: el.dataset.kind, refId: id, qty, unit });
-    persist(); render(); toast('Ajouté ✓');
+    persist('Repas : aliment ajouté'); render(); toast('Ajouté ✓');
   },
-  mealDel(el) { S.meals[ui.mealDate] = (S.meals[ui.mealDate] || []).filter((i) => i.id !== el.dataset.id); persist(); render(); },
+  mealDel(el) { S.meals[ui.mealDate] = (S.meals[ui.mealDate] || []).filter((i) => i.id !== el.dataset.id); persist('Repas : élément retiré'); render(); },
   copyDay() {
     const prev = S.meals[addDays(ui.mealDate, -1)] || [];
     if (!prev.length) { toast('Aucun repas la veille.'); return; }
     if ((S.meals[ui.mealDate] || []).length && !confirm('Ajouter les repas de la veille à ceux déjà saisis ?')) return;
     (S.meals[ui.mealDate] ||= []).push(...prev.map((i) => ({ ...i, id: uid() })));
-    persist(); render();
+    persist('Repas copiés de la veille'); render();
   },
-  slotAdd() { const n = prompt('Nom du repas (ex. Collation 2, Pré-training) :'); if (n && n.trim()) { S.mealSlots.push(n.trim()); persist(); render(); } },
+  slotAdd() { const n = prompt('Nom du repas (ex. Collation 2, Pré-training) :'); if (n && n.trim()) { S.mealSlots.push(n.trim()); persist('Repas ajouté à la journée'); render(); } },
   slotsEdit() {
     openDialog(`<h2>Repas de la journée</h2><ul class="list">${S.mealSlots.map((s, i) => `<li><span>${h(s)}</span><div class="row-actions"><button class="icon-btn" data-act="slotMove" data-i="${i}" data-dir="-1">↑</button><button class="icon-btn" data-act="slotMove" data-i="${i}" data-dir="1">↓</button><button class="icon-btn" data-act="slotDel" data-i="${i}">×</button></div></li>`).join('')}</ul><div class="row-actions"><button class="btn" data-act="closeDialog">Fermer</button></div>`);
   },
-  slotMove(el) { const i = +el.dataset.i; const j = i + +el.dataset.dir; if (j < 0 || j >= S.mealSlots.length) return; [S.mealSlots[i], S.mealSlots[j]] = [S.mealSlots[j], S.mealSlots[i]]; persist(); actions.slotsEdit(); render(); },
-  slotDel(el) { S.mealSlots.splice(+el.dataset.i, 1); persist(); actions.slotsEdit(); render(); },
+  slotMove(el) { const i = +el.dataset.i; const j = i + +el.dataset.dir; if (j < 0 || j >= S.mealSlots.length) return; [S.mealSlots[i], S.mealSlots[j]] = [S.mealSlots[j], S.mealSlots[i]]; persist('Ordre des repas modifié'); actions.slotsEdit(); render(); },
+  slotDel(el) { S.mealSlots.splice(+el.dataset.i, 1); persist('Repas retiré de la journée'); actions.slotsEdit(); render(); },
   recipeNew() { ui.recipeDraft = { id: uid(), name: '', category: '', portions: 1, cookedWeight: '', ingredients: [], notes: '' }; ui.ingQuery = ''; ui.mealsView = 'recipeEdit'; render(); window.scrollTo(0, 0); },
   recipeEdit(el) { ui.recipeDraft = structuredClone(recipeById(el.dataset.id)); ui.ingQuery = ''; ui.mealsView = 'recipeEdit'; render(); window.scrollTo(0, 0); },
-  recipeDup(el) { const r = structuredClone(recipeById(el.dataset.id)); r.id = uid(); r.name += ' (copie)'; S.recipes.push(r); persist(); render(); },
+  recipeDup(el) { const r = structuredClone(recipeById(el.dataset.id)); r.id = uid(); r.name += ' (copie)'; S.recipes.push(r); persist('Recette dupliquée'); render(); },
   ingAdd(el) { ui.recipeDraft.ingredients.push({ foodId: el.dataset.id, g: 100 }); ui.ingQuery = ''; render(); const inputs = document.querySelectorAll('[data-input="ingG"]'); const last = inputs[inputs.length - 1]; if (last) { last.focus(); last.select(); } },
   ingDel(el) { ui.recipeDraft.ingredients.splice(+el.dataset.i, 1); render(); },
   recipeSave() {
@@ -842,26 +1144,29 @@ const actions = {
     r.portions = Math.max(1, num(r.portions) || 1);
     const i = S.recipes.findIndex((x) => x.id === r.id);
     if (i >= 0) S.recipes[i] = r; else S.recipes.push(r);
-    ui.recipeDraft = null; ui.mealsView = 'recipes'; persist(); render(); toast('Recette enregistrée ✓');
+    ui.recipeDraft = null; ui.mealsView = 'recipes'; persist('Recette enregistrée'); render(); toast('Recette enregistrée ✓');
   },
   recipeCancel() { ui.recipeDraft = null; ui.mealsView = 'recipes'; render(); },
   recipeDel() {
     const id = ui.recipeDraft.id;
     const used = Object.values(S.meals).some((l) => l.some((i) => i.refId === id));
     if (!confirm(used ? 'Cette recette est utilisée dans des repas passés (ils afficheront « supprimé »). Supprimer quand même ?' : 'Supprimer cette recette ?')) return;
-    S.recipes = S.recipes.filter((r) => r.id !== id); ui.recipeDraft = null; ui.mealsView = 'recipes'; persist(); render();
+    S.recipes = S.recipes.filter((r) => r.id !== id); ui.recipeDraft = null; ui.mealsView = 'recipes'; persist('Recette supprimée'); render();
   },
   foodNew(el) { openFoodForm(null, el.dataset.prefill || ''); },
   foodEdit(el) { openFoodForm(foodById(el.dataset.id)); },
-  foodDel(el) { if (!confirm('Supprimer cet aliment ?')) return; S.foods = S.foods.filter((f) => f.id !== el.dataset.id); persist(); closeDialog(); render(); },
+  foodDel(el) { if (!confirm('Supprimer cet aliment ?')) return; S.foods = S.foods.filter((f) => f.id !== el.dataset.id); persist('Aliment supprimé'); closeDialog(); render(); },
   offOpen() { openOff(); },
   offImport(el) {
     const f = { id: uid(), ...offResults[+el.dataset.i] };
-    S.foods.push(f); persist(); toast(`« ${f.name} » ajouté aux aliments ✓`); el.disabled = true; render();
+    S.foods.push(f); persist('Aliment importé'); toast(`« ${f.name} » ajouté aux aliments ✓`); el.disabled = true; render();
   },
   // Suivi
-  weightDel(el) { if (!confirm('Supprimer cette pesée ?')) return; S.weights = S.weights.filter((w) => w.date !== el.dataset.date); persist(); render(); },
-  weightRange(el) { ui.weightRange = +el.dataset.n; render(); },
+  weightDel(el) { if (!confirm('Supprimer cette pesée ?')) return; S.weights = S.weights.filter((w) => w.date !== el.dataset.date); persist('Pesée supprimée'); render(); },
+  periodSpan(el) { ui.periods[el.dataset.k].span = el.dataset.span; ui.weightRows = 14; render(); },
+  weightMore() { ui.weightRows = 10000; render(); },
+  periodShift(el) { shiftPeriod(el.dataset.k, +el.dataset.dir); },
+  periodToday(el) { ui.periods[el.dataset.k].anchor = today(); render(); },
   progPick(el) { ui.progEx = el.dataset.id; render(); window.scrollTo(0, 0); },
   calMonth(el) { const d = parse(ui.calMonth + '-01'); d.setMonth(d.getMonth() + +el.dataset.n); ui.calMonth = iso(d).slice(0, 7); render(); },
   calcTargets() {
@@ -875,24 +1180,24 @@ const actions = {
     const gluc = Math.max(0, Math.round((kcal - prot * 4 - lip * 9) / 4));
     const fib = Math.round((kcal / 1000) * 14);
     st.targets = { kcal, prot, gluc, lip, fib };
-    persist(); render(); toast(`Objectifs : ${kcal} kcal · P ${prot} g · G ${gluc} g · L ${lip} g`);
+    persist('Objectifs recalculés'); render(); toast(`Objectifs : ${kcal} kcal · P ${prot} g · G ${gluc} g · L ${lip} g`);
   },
   exportData() {
     download(`seche-sauvegarde-${today()}.json`, JSON.stringify(S, null, 1), 'application/json');
-    S.settings.lastExport = today(); persist(); render();
+    S.settings.lastExport = today(); persist('Export de sauvegarde', { silent: true }); render();
   },
   csv(el) { download(`seche-${el.dataset.k}-${today()}.csv`, csvFile(el.dataset.k), 'text/csv;charset=utf-8'); },
   histFilter(el) { ui.histFilter = el.dataset.f; ui.histDays = 30; render(); },
   histMore() { ui.histDays += 30; render(); },
-  importMerge() { S = mergeStates(S, pendingImport); pendingImport = null; persist(); closeDialog(); render(); toast('Données fusionnées ✓'); },
+  importMerge() { S = mergeStates(S, pendingImport); pendingImport = null; persist('Import fusionné'); closeDialog(); render(); toast('Données fusionnées ✓'); },
   importReplace() {
     if (!confirm('Remplacer toutes les données de cet appareil par la sauvegarde ?')) return;
-    save(pendingImport); S = load(); pendingImport = null; closeDialog(); render(); toast('Sauvegarde importée ✓');
+    S = normalize(pendingImport); pendingImport = null; persist('Sauvegarde importée (remplacement)'); closeDialog(); render(); toast('Sauvegarde importée ✓', { act: 'undo', label: 'Annuler' });
   },
   resetAll() {
     if (!confirm('Effacer TOUTES les données (séances, repas, pesées, recettes) ? Pense à exporter avant.')) return;
     if (!confirm('Vraiment tout effacer ? Cette action est définitive.')) return;
-    reset(); S = load(); persist(); render();
+    reset(userKey()); journal.clear(userKey()); switchTo(load(userKey()));
   },
 };
 
@@ -902,12 +1207,12 @@ const inputs = {
   set(el) {
     const s = workoutOn(ui.workoutDate).entries[+el.dataset.e].sets[+el.dataset.s];
     s[el.dataset.f] = el.value === '' ? '' : num(el.value);
-    persist();
+    persist('Séance : saisie des séries', { group: 'set' });
   },
-  workoutNote(el) { workoutOn(ui.workoutDate).notes = el.value; persist(); },
-  planActive(el) { S.plan[el.dataset.d].active = el.checked; if (el.checked && !S.plan[el.dataset.d].name) S.plan[el.dataset.d].name = DAY_NAMES[el.dataset.d]; persist(); render(); },
-  planName(el) { S.plan[el.dataset.d].name = el.value; persist(); },
-  planSets(el) { S.plan[el.dataset.d].items[+el.dataset.i].sets = Math.max(1, Math.round(num(el.value)) || 1); persist(); },
+  workoutNote(el) { workoutOn(ui.workoutDate).notes = el.value; persist('Notes de séance', { group: 'note' }); },
+  planActive(el) { S.plan[el.dataset.d].active = el.checked; if (el.checked && !S.plan[el.dataset.d].name) S.plan[el.dataset.d].name = DAY_NAMES[el.dataset.d]; persist('Programme : jour activé / désactivé'); render(); },
+  planName(el) { S.plan[el.dataset.d].name = el.value; persist('Programme : nom de séance', { group: 'planName' + el.dataset.d }); },
+  planSets(el) { S.plan[el.dataset.d].items[+el.dataset.i].sets = Math.max(1, Math.round(num(el.value)) || 1); persist('Programme : nombre de séries', { group: 'planSets' }); },
   bankQuery(el) { ui.bankQuery = el.value; rerenderKeepFocus(); },
   recipeQuery(el) { ui.recipeQuery = el.value; rerenderKeepFocus(); },
   foodQuery(el) { ui.foodQuery = el.value; rerenderKeepFocus(); },
@@ -918,7 +1223,7 @@ const inputs = {
   mealQty(el) {
     const it = (S.meals[ui.mealDate] || []).find((i) => i.id === el.dataset.id);
     if (!it || !(num(el.value) > 0)) return;
-    it.qty = num(el.value); persist();
+    it.qty = num(el.value); persist('Repas : quantité modifiée', { group: 'qty' + it.id });
     // Mise à jour ciblée (un re-rendu complet au blur avalerait le prochain toucher)
     $(`#im-${it.id}`).innerHTML = macroLine(itemMacros(it), true);
     const si = daySlots(ui.mealDate).indexOf(it.slot);
@@ -942,8 +1247,8 @@ const inputs = {
     $('#recipe-totals').innerHTML = recipeTotalsHtml(recipeTotals(ui.recipeDraft));
   },
   progEx(el) { ui.progEx = el.value; render(); },
-  target(el) { S.settings.targets[el.dataset.k] = num(el.value); persist(); },
-  setting(el) { S.settings[el.dataset.k] = el.type === 'checkbox' ? el.checked : el.tagName === 'SELECT' && el.dataset.k === 'sex' ? el.value : num(el.value); persist(); },
+  target(el) { S.settings.targets[el.dataset.k] = num(el.value); persist('Objectifs modifiés', { group: 'targets' }); },
+  setting(el) { S.settings[el.dataset.k] = el.type === 'checkbox' ? el.checked : el.tagName === 'SELECT' && el.dataset.k === 'sex' ? el.value : num(el.value); persist('Réglages modifiés', { group: 'settings' }); },
   exType(el) {
     const d = TYPE_DEFAULTS[el.value]; const f = el.form;
     f.repMin.value = d.repMin; f.repMax.value = d.repMax; f.increment.value = String(d.increment).replace('.', ',');
@@ -986,7 +1291,7 @@ const forms = {
     const met = (CARDIO_TYPES.find((c) => c.id === fd.type) || { met: 5 }).met;
     const kcal = num(fd.kcal) || Math.round(met * (lastW ? num(lastW.kg) : 60) * (minutes / 60));
     S.cardio.push({ id: uid(), date: fd.date || today(), type: fd.type, minutes, km: num(fd.km) || '', hr: num(fd.hr) || '', kcal, notes: fd.notes || '' });
-    persist(); render(); toast('Cardio enregistré ✓');
+    persist('Cardio enregistré'); render(); toast('Cardio enregistré ✓');
   },
   weight(f) {
     const fd = Object.fromEntries(new FormData(f));
@@ -995,7 +1300,7 @@ const forms = {
     const date = fd.date || today();
     S.weights = S.weights.filter((w) => w.date !== date);
     S.weights.push({ date, kg });
-    persist(); render(); toast('Pesée enregistrée ✓');
+    persist('Pesée enregistrée'); render(); toast('Pesée enregistrée ✓');
   },
   exercise(f) {
     const fd = Object.fromEntries(new FormData(f));
@@ -1006,7 +1311,7 @@ const forms = {
     if (data.repMax <= data.repMin) data.repMax = data.repMin + 2;
     let ex;
     if (f.dataset.id) { ex = exById(f.dataset.id); Object.assign(ex, data); } else { ex = { id: uid(), ...data }; S.exercises.push(ex); }
-    persist();
+    persist('Exercice enregistré');
     if (f.dataset.fromPicker && pickerCb) { const cb = pickerCb; closeDialog(); cb(ex.id); } else { closeDialog(); render(); }
   },
   food(f) {
@@ -1019,9 +1324,26 @@ const forms = {
       S.foods.push(food);
       if (ui.mealsView === 'recipeEdit' && ui.recipeDraft) { ui.recipeDraft.ingredients.push({ foodId: food.id, g: 100 }); ui.ingQuery = ''; }
     }
-    persist(); closeDialog(); render();
+    persist('Aliment enregistré'); closeDialog(); render();
   },
   off(f) { offSearch(new FormData(f).get('q')); },
+  async auth(f) {
+    const fd = Object.fromEntries(new FormData(f));
+    const btn = f.querySelector('[type="submit"]');
+    btn.disabled = true;
+    try {
+      if (ui.authMode === 'signup') {
+        const name = (fd.name || '').trim();
+        await cloud.signUp(fd.email.trim(), fd.password, name);
+        if (account && name) { account.name = name; render(); }
+      }
+      else await cloud.signIn(fd.email.trim(), fd.password);
+      toast('Connecté·e ✓');
+    } catch (e) {
+      toast(cloud.errorText(e));
+      btn.disabled = false;
+    }
+  },
 };
 
 // ---------- Démarrage ----------
@@ -1048,6 +1370,7 @@ function bind() {
   });
   document.querySelectorAll('.tabbar button').forEach((b) => b.addEventListener('click', () => {
     if (ui.tab === b.dataset.tab) { window.scrollTo({ top: 0, behavior: 'smooth' }); }
+    if (ui.suiviView === 'settings') ui.suiviView = 'poids';
     ui.tab = b.dataset.tab; render();
   }));
   dlg().addEventListener('click', (e) => { if (e.target === dlg()) closeDialog(); });
@@ -1066,5 +1389,10 @@ function bind() {
 
 bind();
 render();
+refreshUndo();
+cloud.init(onAccount);
+// Accès de débogage (console du navigateur / tests).
+window.__seche = { get state() { return S; }, get account() { return account; } };
+window.addEventListener('online', () => { if (sync) sync.schedule(0); });
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});

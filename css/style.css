@@ -74,9 +74,41 @@ p { margin: 6px 0; }
 .empty { color: var(--muted); text-align: center; padding: 14px; }
 .warn-text { color: var(--warn); }
 
-.page-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 8px 0 14px; flex-wrap: wrap; }
+.page-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 8px 0 14px; flex-wrap: wrap; }
 .page-head .date { color: var(--muted); margin: 0; }
 .page-head .date::first-letter { text-transform: uppercase; }
+
+/* En-tête : annuler / journal / compte */
+.head-actions { display: flex; gap: 8px; align-items: center; }
+.head-btn { width: 42px; height: 42px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--text-2); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
+.head-btn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.head-btn:disabled { opacity: .35; cursor: default; }
+.head-btn.account.on { border-color: var(--accent); }
+.avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; }
+.sync { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; color: var(--text-2); }
+.sync i { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+.sync.ok i { background: var(--good); }
+.sync.pending i { background: var(--warn); }
+.sync.error i { background: var(--bad); }
+.journal li { gap: 12px; }
+
+/* Périodes */
+.period { display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px; }
+.period-nav { display: flex; align-items: center; gap: 8px; }
+.period-label { font-weight: 700; min-width: 0; flex: 1; text-align: center; }
+.period-nav .icon-btn:disabled { opacity: .35; }
+.chart-empty { padding: 60px 0; }
+.delta { font-size: 13px; font-weight: 700; margin-left: 6px; color: var(--muted); }
+.delta.down { color: var(--good); }
+.delta.up { color: var(--warn); }
+.target-line { stroke: var(--text-2); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.target-label { fill: var(--text-2); font-size: 12px; font-weight: 600; }
+.bar-mark.active { fill: var(--series-2); }
+.legend i.dashed { width: 16px; height: 0; border-top: 2px dashed var(--text-2); border-radius: 0; background: none; }
+.kcal-table td.ok { color: var(--good); font-weight: 600; }
+.kcal-table td.over { color: var(--warn); font-weight: 600; }
+.kcal-table td.under { color: var(--text-2); }
+.kcal-table tr.nodata td { color: var(--muted); }
 
 /* Barre d'onglets */
 .tabbar {
@@ -286,6 +318,9 @@ dialog .chips { margin: 10px 0; }
 dialog .row-actions { margin-top: 12px; flex-wrap: wrap; }
 dialog input[type="search"] { margin-bottom: 4px; }
 
+.toast { display: flex; align-items: center; gap: 12px; }
+.toast[hidden] { display: none; }
+.toast button { border: 0; background: none; color: var(--accent); font: inherit; font-weight: 700; padding: 4px 0; cursor: pointer; }
 .toast {
   position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(90px + env(safe-area-inset-bottom)); z-index: 20;
   background: var(--text); color: var(--surface); padding: 10px 16px; border-radius: 12px; font-weight: 600; font-size: 15px; max-width: calc(100vw - 32px);
@@ -316,4 +351,5 @@ dialog input[type="search"] { margin-bottom: 4px; }
   .sets .icon-btn { width: 34px; }
   .toolbar input[type="search"] { min-width: 0; flex-basis: 100%; }
   .legend { gap: 10px; font-size: 12px; }
+  .stat .value { font-size: 22px; }
 }
