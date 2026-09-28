@@ -1,6 +1,6 @@
 // Service worker : l'app fonctionne hors ligne (salle de sport, piscine…).
 // Incrémenter VERSION à chaque mise à jour des fichiers.
-const VERSION = 'seche-v1';
+const VERSION = 'seche-v2';
 const FILES = [
   './', 'index.html', 'css/style.css', 'js/app.js', 'js/data.js', 'js/store.js', 'js/progression.js', 'js/charts.js',
   'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',

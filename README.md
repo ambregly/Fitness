@@ -1,6 +1,6 @@
-# Suivi de sèche — app iPad
+# Suivi de sèche — app iPad et iPhone
 
-Web‑app installable sur iPad (PWA) : elle s’ouvre en plein écran depuis l’écran d’accueil, fonctionne hors ligne et garde toutes les données **sur l’iPad** (aucun compte, aucun serveur).
+Web‑app installable sur iPad et iPhone (PWA) : elle s’ouvre en plein écran depuis l’écran d’accueil, fonctionne hors ligne et garde toutes les données **sur l’iPad** (aucun compte, aucun serveur).
 
 ## Onglets
 
@@ -19,6 +19,7 @@ Web‑app installable sur iPad (PWA) : elle s’ouvre en plein écran depuis l�
 **Suivi**
 - *Poids* : pesée du jour, courbe (date × poids) avec moyenne sur 7 jours, évolution hebdomadaire en kg et en % comparée à la cible 0,5–1 %/semaine.
 - *Progression* : pour chaque exercice, prochain objectif, courbe du 1RM estimé et de la charge, historique des séries.
+- *Historique* : tout ce qui a été saisi, jour par jour (séances avec chaque série, cardio, pesées, repas), filtrable, avec export CSV pour Numbers / Excel.
 - *Calendrier* : muscu faite / manquée, cardio, pesées, repas saisis.
 - *Réglages* : objectifs nutritionnels, calculateur de sèche (Mifflin‑St Jeor), règle de progression, export / import de sauvegarde.
 
@@ -26,13 +27,15 @@ Web‑app installable sur iPad (PWA) : elle s’ouvre en plein écran depuis l�
 
 Double progression : on garde la charge et on ajoute des répétitions jusqu’au haut de la fourchette, puis on augmente la charge. Exemple hip thrust (6–10 reps, +5 kg) : 120×8 → 120×9 → 120×10 → 125×8 (ou 130×6 avec un incrément de 10 kg). Méthode et sources (ACSM 2009, NSCA, Plotkin 2022, Schoenfeld 2021, Helms 2014) : [`docs/surcharge-progressive.html`](docs/surcharge-progressive.html).
 
-## Installer sur l’iPad
+## Installer sur l’iPad et l’iPhone
 
 1. Sur GitHub : **Settings → Pages → Build and deployment → Source : GitHub Actions**. Le workflow `.github/workflows/pages.yml` publie l’app à chaque push, à l’adresse `https://ambregly.github.io/Fitness/`.
-2. Sur l’iPad, ouvre cette adresse dans **Safari**, touche **Partager → Sur l’écran d’accueil**.
+2. Sur l’iPad (et/ou l’iPhone), ouvre cette adresse dans **Safari**, touche **Partager → Sur l’écran d’accueil**.
 3. Lance l’app depuis l’icône « Sèche ». Elle marche ensuite hors ligne.
 
-⚠️ Les données sont stockées dans l’app sur l’iPad. Utilise **Suivi › Réglages › Exporter** régulièrement (enregistre le fichier dans iCloud Drive) ; l’import restaure tout.
+⚠️ Les données sont stockées sur chaque appareil. Utilise **Suivi › Réglages › Exporter** régulièrement (enregistre le fichier dans iCloud Drive).
+
+**Passer de l’iPhone à l’iPad (ou l’inverse)** : Exporter sur un appareil → iCloud Drive → sur l’autre, Importer puis **Fusionner**. La fusion ajoute sans rien effacer (séances, cardio, pesées, repas, recettes).
 
 ## Développement
 

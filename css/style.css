@@ -261,6 +261,21 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .m.meals { color: var(--series-1); font-size: 10px; }
 .cal-legend { margin-top: 12px; }
 
+/* Historique */
+.hist-filters { margin-bottom: 14px; }
+.h-day h3 { margin-bottom: 10px; }
+.h-item { display: flex; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border); }
+.h-item:first-of-type { border-top: 0; }
+.h-kind { flex: none; width: 72px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding-top: 2px; }
+.h-kind.muscu { color: var(--good); }
+.h-kind.cardio { color: var(--series-2); }
+.h-kind.poids { color: var(--text-2); }
+.h-kind.repas { color: var(--series-1); }
+.h-body { min-width: 0; flex: 1; }
+.h-title { font-weight: 600; }
+.h-sets { list-style: none; margin: 4px 0 0; padding: 0; font-size: 14px; }
+.h-sets li { padding: 2px 0; }
+
 /* Dialogue */
 dialog {
   border: 1px solid var(--border); border-radius: 18px; padding: 18px; width: min(640px, calc(100vw - 32px)); max-height: 86vh;
@@ -283,4 +298,22 @@ dialog input[type="search"] { margin-bottom: 4px; }
   .day .dnum { font-size: 16px; }
   .cal-cell { min-height: 52px; }
   .rec-card .big-target { font-size: 24px; }
+  .page-head .date { font-size: 14px; }
+  .card { padding: 14px; }
+  .subnav button { font-size: 14px; padding: 8px 10px; flex: 1 0 auto; }
+  .grid-form { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .bars { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .bar-label { font-size: 12px; }
+  .week { gap: 4px; }
+  .ing-table th:nth-child(7), .ing-table td:nth-child(7) { display: none; }
+  .ing-table th, .ing-table td { padding: 6px 3px; font-size: 13px; }
+  .ing-table .qty { width: 60px; }
+  .nutri th, .nutri td { padding: 6px 3px; font-size: 13px; }
+  .h-kind { width: 58px; font-size: 11px; }
+  .sets input { font-size: 17px; padding: 8px 4px; }
+  .check { width: 44px; }
+  .sets td:nth-child(5) { width: 40px; }
+  .sets .icon-btn { width: 34px; }
+  .toolbar input[type="search"] { min-width: 0; flex-basis: 100%; }
+  .legend { gap: 10px; font-size: 12px; }
 }

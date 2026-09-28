@@ -1,7 +1,7 @@
 import { CATEGORIES, TYPE_DEFAULTS, CARDIO_TYPES, NUTRIENTS } from './data.js';
 import {
   load, save, reset, uid, iso, today, parse, addDays, dow, diffDays, mondayOf,
-  DAY_NAMES, DAY_SHORT, longDate, shortDate, validateImport,
+  DAY_NAMES, DAY_SHORT, longDate, shortDate, validateImport, mergeStates,
 } from './store.js';
 import { exerciseHistory, recommend, sessionStats, stagnation, e1rm, fmtKg } from './progression.js';
 import { lineChart } from './charts.js';
@@ -19,6 +19,8 @@ const ui = {
   mealDate: today(),
   progEx: null,
   weightRange: 90,
+  histFilter: 'all',
+  histDays: 30,
   calMonth: today().slice(0, 7),
   recipeDraft: null,
   day: today(),
@@ -163,6 +165,9 @@ function render() {
   const main = $('#main');
   const views = { sport: renderSport, meals: renderMeals, suivi: renderSuivi };
   main.innerHTML = views[ui.tab]();
+  // Sur iPhone, la barre de sous-onglets défile : on garde l'onglet actif visible.
+  const act = main.querySelector('.subnav .active');
+  if (act) act.parentElement.scrollLeft = act.offsetLeft - (act.parentElement.clientWidth - act.offsetWidth) / 2;
   afterRender();
 }
 
@@ -377,8 +382,8 @@ function mealsFoods() {
 
 // ================= SUIVI =================
 function renderSuivi() {
-  const nav = subnav('suivi', [['poids', 'Poids'], ['prog', 'Progression'], ['cal', 'Calendrier'], ['settings', 'Réglages']]);
-  const v = { poids: suiviWeight, prog: suiviProg, cal: suiviCal, settings: suiviSettings }[ui.suiviView]();
+  const nav = subnav('suivi', [['poids', 'Poids'], ['prog', 'Progression'], ['hist', 'Historique'], ['cal', 'Calendrier'], ['settings', 'Réglages']]);
+  const v = { poids: suiviWeight, prog: suiviProg, hist: suiviHistory, cal: suiviCal, settings: suiviSettings }[ui.suiviView]();
   return `<header class="page-head"><h1>Suivi</h1><p class="date">${longDate(today())}</p></header>${nav}${v}`;
 }
 
@@ -456,6 +461,103 @@ function suiviProg() {
   <div class="card"><h3>Tous les exercices</h3><table class="hist clickable"><thead><tr><th>Exercice</th><th>Dernière</th><th>Meilleure série</th><th>Prochain objectif</th></tr></thead><tbody>${overview}</tbody></table></div>`;
 }
 
+// ---------- Historique de toutes les saisies ----------
+function historyDates() {
+  const f = ui.histFilter;
+  const set = new Set();
+  if (f === 'all' || f === 'muscu') S.workouts.filter(workoutDone).forEach((w) => set.add(w.date));
+  if (f === 'all' || f === 'cardio') S.cardio.forEach((c) => set.add(c.date));
+  if (f === 'all' || f === 'poids') S.weights.forEach((w) => set.add(w.date));
+  if (f === 'all' || f === 'repas') Object.entries(S.meals).forEach(([d, l]) => { if (l.length) set.add(d); });
+  return [...set].sort().reverse();
+}
+
+function historyDayHtml(d) {
+  const f = ui.histFilter;
+  const parts = [];
+  const w = workoutOn(d);
+  if ((f === 'all' || f === 'muscu') && workoutDone(w)) {
+    const lines = w.entries.map((en) => {
+      const ex = exById(en.exId);
+      const done = en.sets.filter((x) => x.done);
+      return done.length ? `<li><strong>${h(ex ? ex.name : '?')}</strong> <span class="muted">${done.map((x) => `${fmt(num(x.w))}×${x.r}`).join(', ')}</span></li>` : '';
+    }).join('');
+    parts.push(`<div class="h-item"><div class="h-kind muscu">Muscu</div><div class="h-body"><div class="h-title">${h(w.name)} <button class="linklike" data-act="pickWorkoutDate" data-date="${d}">ouvrir</button></div><ul class="h-sets">${lines}</ul>${w.notes ? `<p class="muted small">${h(w.notes)}</p>` : ''}</div></div>`);
+  }
+  if (f === 'all' || f === 'cardio') {
+    for (const c of cardioOn(d)) {
+      const ty = CARDIO_TYPES.find((x) => x.id === c.type) || { name: c.type };
+      parts.push(`<div class="h-item"><div class="h-kind cardio">Cardio</div><div class="h-body"><div class="h-title">${ty.name}</div><span class="muted small">${c.minutes} min${c.km ? ` · ${fmt(num(c.km))} km` : ''}${c.hr ? ` · ${c.hr} bpm` : ''} · ≈ ${fmt(num(c.kcal), 0)} kcal${c.notes ? ' · ' + h(c.notes) : ''}</span></div></div>`);
+    }
+  }
+  const wt = weightOn(d);
+  if ((f === 'all' || f === 'poids') && wt) {
+    parts.push(`<div class="h-item"><div class="h-kind poids">Pesée</div><div class="h-body"><div class="h-title">${fmt(num(wt.kg))} kg</div></div></div>`);
+  }
+  const meals = S.meals[d] || [];
+  if ((f === 'all' || f === 'repas') && meals.length) {
+    const tot = dayTotals(d);
+    const names = meals.map((it) => { const r = it.kind === 'food' ? foodById(it.refId) : recipeById(it.refId); return r ? h(r.name) : '?'; });
+    parts.push(`<div class="h-item"><div class="h-kind repas">Repas</div><div class="h-body"><div class="h-title">${macroLine(tot, true)} <button class="linklike" data-act="gotoMeals" data-date="${d}">ouvrir</button></div><span class="muted small">${names.join(', ')}</span></div></div>`);
+  }
+  return parts.join('');
+}
+
+function suiviHistory() {
+  const dates = historyDates();
+  const shown = dates.slice(0, ui.histDays);
+  const filters = [['all', 'Tout'], ['muscu', 'Musculation'], ['cardio', 'Cardio'], ['poids', 'Pesées'], ['repas', 'Repas']];
+  const nWorkouts = S.workouts.filter(workoutDone).length;
+  const nMealDays = Object.values(S.meals).filter((l) => l.length).length;
+  return `<div class="stats"><div class="stat"><span class="label">Séances muscu</span><span class="value">${nWorkouts}</span></div><div class="stat"><span class="label">Séances cardio</span><span class="value">${S.cardio.length}</span></div><div class="stat"><span class="label">Pesées</span><span class="value">${S.weights.length}</span></div><div class="stat"><span class="label">Jours de repas</span><span class="value">${nMealDays}</span></div></div>
+  <div class="chips hist-filters">${filters.map(([id, l]) => `<button class="chip ${ui.histFilter === id ? 'active' : ''}" data-act="histFilter" data-f="${id}">${l}</button>`).join('')}</div>
+  ${shown.map((d) => `<div class="card h-day"><h3 class="cap">${longDate(d)} <span class="muted small">${parse(d).getFullYear()}</span></h3>${historyDayHtml(d)}</div>`).join('') || '<div class="card"><p class="empty">Rien d’enregistré pour l’instant.</p></div>'}
+  ${dates.length > shown.length ? `<button class="btn ghost big" data-act="histMore">Afficher plus (${dates.length - shown.length} jours restants)</button>` : ''}
+  <div class="card"><h3>Exporter l’historique</h3><p class="muted small">Fichiers CSV lisibles dans Numbers ou Excel.</p>
+    <div class="row-actions wrap"><button class="btn ghost small" data-act="csv" data-k="series">Séries de muscu</button><button class="btn ghost small" data-act="csv" data-k="cardio">Cardio</button><button class="btn ghost small" data-act="csv" data-k="poids">Pesées</button><button class="btn ghost small" data-act="csv" data-k="repas">Repas</button></div></div>`;
+}
+
+function csvFile(kind) {
+  const rows = [];
+  if (kind === 'series') {
+    rows.push(['date', 'seance', 'exercice', 'categorie', 'serie', 'poids_kg', 'reps', '1rm_estime']);
+    for (const w of [...S.workouts].sort((a, b) => a.date.localeCompare(b.date))) {
+      for (const en of w.entries) {
+        const ex = exById(en.exId);
+        en.sets.filter((x) => x.done).forEach((x, i) => rows.push([w.date, w.name, ex ? ex.name : '?', ex ? ex.category : '', i + 1, num(x.w), num(x.r), Math.round(e1rm(num(x.w), num(x.r)) * 10) / 10]));
+      }
+    }
+  } else if (kind === 'cardio') {
+    rows.push(['date', 'activite', 'minutes', 'km', 'fc_moy', 'kcal', 'notes']);
+    for (const c of [...S.cardio].sort((a, b) => a.date.localeCompare(b.date))) rows.push([c.date, (CARDIO_TYPES.find((x) => x.id === c.type) || { name: c.type }).name, c.minutes, c.km, c.hr, c.kcal, c.notes]);
+  } else if (kind === 'poids') {
+    rows.push(['date', 'poids_kg', 'moyenne_7j']);
+    const avg = Object.fromEntries(movingAvg(S.weights).map((p) => [p.x, Math.round(p.y * 100) / 100]));
+    for (const w of [...S.weights].sort((a, b) => a.date.localeCompare(b.date))) rows.push([w.date, num(w.kg), avg[w.date]]);
+  } else {
+    rows.push(['date', 'repas', 'type', 'nom', 'quantite', 'unite', ...NUTRIENTS.map((n) => n.key)]);
+    for (const d of Object.keys(S.meals).sort()) {
+      for (const it of S.meals[d]) {
+        const r = it.kind === 'food' ? foodById(it.refId) : recipeById(it.refId);
+        const m = itemMacros(it);
+        rows.push([d, it.slot, it.kind === 'food' ? 'aliment' : 'recette', r ? r.name : '?', it.qty, it.unit, ...NUTRIENTS.map((n) => Math.round(m[n.key] * 10) / 10)]);
+      }
+    }
+  }
+  // Point-virgule + virgule décimale : format attendu par Numbers / Excel en français.
+  const cell = (v) => { const t = typeof v === 'number' ? String(v).replace('.', ',') : String(v ?? ''); return /[";\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+  return '﻿' + rows.map((r) => r.map(cell).join(';')).join('\n');
+}
+
+function download(name, content, type) {
+  const blob = new Blob([content], { type });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
 function suiviCal() {
   const [y, m] = ui.calMonth.split('-').map(Number);
   const first = `${ui.calMonth}-01`;
@@ -500,7 +602,8 @@ function suiviSettings() {
     <button class="btn primary" data-act="calcTargets" ${lastW ? '' : 'disabled'}>Calculer et appliquer</button></div>
   <div class="card"><h2>Surcharge progressive</h2><label class="switch"><input type="checkbox" data-input="setting" data-k="confirmTwice" ${st.confirmTwice ? 'checked' : ''}><span>Exiger le haut de fourchette sur 2 séances de suite avant d’augmenter la charge (règle ACSM / NSCA « 2-for-2 », plus prudente)</span></label>
   <p class="muted small">Les fourchettes de répétitions et incréments se règlent par exercice dans Sport › Exercices. <a href="docs/surcharge-progressive.html" target="_blank" rel="noopener">Méthode et sources</a></p></div>
-  <div class="card"><h2>Sauvegarde</h2><p class="muted small">Les données restent sur cet iPad (aucun compte, aucun serveur). Exporte régulièrement une sauvegarde dans Fichiers / iCloud Drive. ${st.lastExport ? 'Dernier export : ' + longDate(st.lastExport) + '.' : 'Aucun export pour l’instant.'}</p>
+  <div class="card"><h2>Sauvegarde et iPhone ↔ iPad</h2><p class="muted small">Les données restent sur l’appareil (aucun compte, aucun serveur). Exporte régulièrement une sauvegarde dans Fichiers / iCloud Drive. ${st.lastExport ? 'Dernier export : ' + longDate(st.lastExport) + '.' : 'Aucun export pour l’instant.'}</p>
+    <p class="muted small">Pour retrouver tes données sur l’autre appareil : <strong>Exporter</strong> ici → enregistrer dans iCloud Drive → sur l’autre appareil, <strong>Importer</strong> puis <strong>Fusionner</strong>.</p>
     <div class="row-actions wrap"><button class="btn primary" data-act="exportData">Exporter (JSON)</button><label class="btn ghost file-btn">Importer<input type="file" accept="application/json,.json" data-input="importFile" hidden></label><button class="btn danger" data-act="resetAll">Tout effacer</button></div></div>`;
 }
 
@@ -577,6 +680,7 @@ function openFoodForm(f, prefill = '') {
     ${used ? '<p class="muted small wide">Aliment utilisé dans une recette : il ne peut pas être supprimé.</p>' : ''}</form>`);
 }
 
+let pendingImport = null;
 let offResults = [];
 function openOff() {
   offResults = [];
@@ -774,13 +878,16 @@ const actions = {
     persist(); render(); toast(`Objectifs : ${kcal} kcal · P ${prot} g · G ${gluc} g · L ${lip} g`);
   },
   exportData() {
-    const blob = new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `seche-sauvegarde-${today()}.json`;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    download(`seche-sauvegarde-${today()}.json`, JSON.stringify(S, null, 1), 'application/json');
     S.settings.lastExport = today(); persist(); render();
+  },
+  csv(el) { download(`seche-${el.dataset.k}-${today()}.csv`, csvFile(el.dataset.k), 'text/csv;charset=utf-8'); },
+  histFilter(el) { ui.histFilter = el.dataset.f; ui.histDays = 30; render(); },
+  histMore() { ui.histDays += 30; render(); },
+  importMerge() { S = mergeStates(S, pendingImport); pendingImport = null; persist(); closeDialog(); render(); toast('Données fusionnées ✓'); },
+  importReplace() {
+    if (!confirm('Remplacer toutes les données de cet appareil par la sauvegarde ?')) return;
+    save(pendingImport); S = load(); pendingImport = null; closeDialog(); render(); toast('Sauvegarde importée ✓');
   },
   resetAll() {
     if (!confirm('Effacer TOUTES les données (séances, repas, pesées, recettes) ? Pense à exporter avant.')) return;
@@ -847,8 +954,12 @@ const inputs = {
     file.text().then((txt) => {
       const obj = JSON.parse(txt);
       if (!validateImport(obj)) throw new Error('format');
-      if (!confirm('Remplacer toutes les données actuelles par cette sauvegarde ?')) return;
-      save(obj); S = load(); render(); toast('Sauvegarde importée ✓');
+      pendingImport = obj;
+      el.value = '';
+      const n = (obj.workouts || []).length;
+      openDialog(`<h2>Importer une sauvegarde</h2><p>Fichier : <strong>${h(file.name)}</strong><br><span class="muted small">${n} séance(s), ${(obj.cardio || []).length} cardio, ${(obj.weights || []).length} pesée(s), ${(obj.recipes || []).length} recette(s).</span></p>
+        <p><strong>Fusionner</strong> ajoute les données du fichier à celles de cet appareil, sans rien effacer. C’est le bon choix pour passer de l’iPhone à l’iPad (et inversement).</p>
+        <div class="row-actions"><button class="btn primary" data-act="importMerge">Fusionner</button><button class="btn danger" data-act="importReplace">Remplacer tout</button><button class="btn ghost" data-act="closeDialog">Annuler</button></div>`);
     }).catch(() => toast('Fichier de sauvegarde invalide.'));
   },
 };
