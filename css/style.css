@@ -92,6 +92,11 @@ p { margin: 6px 0; }
 .sync.error i { background: var(--bad); }
 .journal li { gap: 12px; }
 
+.notif-title { margin-top: 16px; }
+.notif-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }
+.notif-row select { width: auto; min-width: 84px; }
+.notif-help { margin: 2px 0 6px 34px; }
+
 /* Périodes */
 .period { display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px; }
 .period-nav { display: flex; align-items: center; gap: 8px; }

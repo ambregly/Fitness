@@ -1,0 +1,11 @@
+{
+  "name": "seche-notify",
+  "private": true,
+  "type": "module",
+  "description": "Envoi des rappels (notifications push) — lancé par .github/workflows/notifications.yml",
+  "scripts": { "start": "node notify.mjs" },
+  "dependencies": {
+    "firebase-admin": "^13.5.0",
+    "web-push": "^3.6.7"
+  }
+}

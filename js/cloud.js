@@ -68,6 +68,14 @@ export const signIn = (email, password) => fb.signInWithEmailAndPassword(auth, e
 export const signOutUser = () => fb.signOut(auth);
 export const resetPassword = (email) => fb.sendPasswordResetEmail(auth, email);
 
+// Abonnement aux notifications de cet appareil : users/{uid}/push/{appareil}
+export async function savePushSubscription(uid, subscription, tz) {
+  await fb.setDoc(fb.doc(db, 'users', uid, 'push', deviceId), { subscription: JSON.parse(JSON.stringify(subscription)), tz, ua: navigator.userAgent.slice(0, 120), updatedAt: fb.serverTimestamp() });
+}
+export async function deletePushSubscription(uid) {
+  await fb.deleteDoc(fb.doc(db, 'users', uid, 'push', deviceId));
+}
+
 const chunksCol = (uid) => fb.collection(db, 'users', uid, 'chunks');
 
 /** Récupère une fois tous les blocs du compte : {id: data}. */

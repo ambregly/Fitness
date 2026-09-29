@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Notifications</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <style>
+    body { padding-bottom: 40px; }
+    .container { max-width: 760px; }
+    ol > li { margin: 10px 0; }
+    code { font-family: ui-monospace, Menlo, monospace; font-size: 14px; background: var(--surface-2); border-radius: 6px; padding: 1px 5px; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+<main class="container">
+  <p><a href="../index.html">← Retour à l’app</a></p>
+  <h1>Notifications (rappels)</h1>
+
+  <div class="card">
+    <h2>Comment ça marche</h2>
+    <p>Toutes les heures, une tâche automatique sur GitHub (<code>.github/workflows/notifications.yml</code>) regarde les données de chaque compte qui a activé les notifications et envoie, si besoin :</p>
+    <ul>
+      <li><strong>Repas</strong> (21 h par défaut) : si le petit-déjeuner, le déjeuner ou le dîner ne sont pas notés.</li>
+      <li><strong>Séance</strong> (19 h) : les jours de musculation prévus, si la séance n’est pas validée.</li>
+      <li><strong>Pesée</strong> (8 h) : tous les 5 jours, puis chaque semaine quand la progression est bonne (perte de 0,4 à 1,2 % du poids par semaine sur 3 semaines).</li>
+    </ul>
+    <p>Heures et fréquence se règlent dans l’app : icône personne → Notifications.</p>
+  </div>
+
+  <div class="card">
+    <h2>Configuration (une seule fois, sur ordinateur de préférence)</h2>
+    <p>La tâche automatique a besoin de deux « secrets » GitHub. Ils ne sont visibles par personne une fois enregistrés.</p>
+    <ol>
+      <li><strong>Clé Firebase du serveur</strong> : sur <a href="https://console.firebase.google.com/" target="_blank" rel="noopener">console.firebase.google.com</a>, projet <em>fitness</em> → roue dentée ⚙ → <strong>Paramètres du projet</strong> → onglet <strong>Comptes de service</strong> → <strong>Générer une nouvelle clé privée</strong> → Générer. Un fichier <code>.json</code> est téléchargé. <strong>Ne l’envoie à personne</strong> (il donne accès à toutes les données).</li>
+      <li>Sur GitHub, dépôt <em>Fitness</em> → <strong>Settings</strong> → <strong>Secrets and variables</strong> → <strong>Actions</strong> → <strong>New repository secret</strong> :
+        <ul>
+          <li>Name : <code>FIREBASE_SERVICE_ACCOUNT</code> ; Secret : ouvre le fichier <code>.json</code> avec un éditeur de texte (Bloc-notes, TextEdit…) et colle <strong>tout son contenu</strong>. → Add secret.</li>
+        </ul>
+      </li>
+      <li>Encore <strong>New repository secret</strong> :
+        <ul>
+          <li>Name : <code>VAPID_PRIVATE_KEY</code> ; Secret : la clé donnée par Claude dans la conversation. → Add secret.</li>
+        </ul>
+      </li>
+      <li>Supprime ensuite le fichier <code>.json</code> téléchargé.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2>Activer sur l’iPhone / l’iPad</h2>
+    <ol>
+      <li>iOS 16.4 ou plus récent. L’app doit être <strong>installée</strong> : dans Safari, <strong>Partager → Sur l’écran d’accueil</strong>.</li>
+      <li>Ouvre l’app <strong>depuis l’icône</strong> de l’écran d’accueil, connecte-toi à ton compte.</li>
+      <li>Icône personne → <strong>Notifications</strong> → <strong>Activer les notifications sur cet appareil</strong> → Autoriser.</li>
+      <li>Une notification « Notifications activées ✅ » confirme que tout marche. À faire sur chaque appareil qui doit recevoir les rappels.</li>
+    </ol>
+    <p class="muted small">Pas de notification ? Vérifie Réglages de l’iPhone → Notifications → Sèche, et que le mode Concentration ne les bloque pas.</p>
+  </div>
+</main>
+</body>
+</html>

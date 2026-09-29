@@ -7,6 +7,8 @@ import { exerciseHistory, recommend, sessionStats, stagnation, e1rm, fmtKg } fro
 import { lineChart, barChart } from './charts.js';
 import * as journal from './journal.js';
 import * as cloud from './cloud.js';
+import { notifSettings, weighInterval, nextWeighDate } from './reminders.js';
+import { vapidPublicKey } from './push-config.js';
 
 // ---------- Compte + données ----------
 let account = null; // {uid, email, name} quand connecté
@@ -309,7 +311,7 @@ function alerts() {
   if (!lastW) out.push({ kind: 'info', html: 'Aucune pesée enregistrée : ajoute ta première pesée dans <strong>Suivi</strong>.', action: '<button class="btn small" data-act="goto" data-tab="suivi" data-view="poids">Me peser</button>' });
   else {
     const gap = diffDays(lastW.date, t);
-    if (gap >= 4) out.push({ kind: 'info', html: `Dernière pesée il y a <strong>${gap} jours</strong> (${shortDate(lastW.date)}).`, action: '<button class="btn small" data-act="goto" data-tab="suivi" data-view="poids">Me peser</button>' });
+    if (nextWeighDate(S, t) <= t) out.push({ kind: 'info', html: `Jour de pesée : dernière il y a <strong>${gap} jours</strong> (${shortDate(lastW.date)}).`, action: '<button class="btn small" data-act="goto" data-tab="suivi" data-view="poids">Me peser</button>' });
   }
   const y = addDays(t, -1);
   if (y >= S.createdAt && !(S.meals[y] || []).length) {
@@ -849,6 +851,88 @@ function accountCard() {
     </form></div>`;
 }
 
+// ---------- Notifications ----------
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+
+async function refreshPushState() {
+  let st;
+  if (isIOS && !isStandalone()) st = 'install';
+  else if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) st = 'unsupported';
+  else if (Notification.permission === 'denied') st = 'denied';
+  else {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = reg && await reg.pushManager.getSubscription();
+    st = sub ? 'on' : 'off';
+  }
+  if (st !== ui.pushState) {
+    ui.pushState = st;
+    if (ui.tab === 'suivi' && ui.suiviView === 'settings') render();
+  }
+}
+
+function b64ToBytes(b64) {
+  const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
+
+async function enablePush() {
+  if (!account) { toast('Connecte-toi d’abord à ton compte.'); return; }
+  try {
+    // Doit être appelé directement depuis le toucher (exigence iOS).
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { toast('Notifications refusées. Tu peux les autoriser dans Réglages › Notifications de l’iPhone.'); refreshPushState(); return; }
+    const reg = await navigator.serviceWorker.ready;
+    const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(vapidPublicKey) });
+    await cloud.savePushSubscription(account.uid, sub, Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Paris');
+    reg.showNotification('Notifications activées ✅', { body: 'Tu recevras ici tes rappels de repas, de séance et de pesée.', icon: 'icons/icon-192.png' });
+    ui.pushState = 'on';
+    render();
+  } catch (e) {
+    console.warn(e);
+    toast('Activation impossible : ' + (e.message || e));
+    refreshPushState();
+  }
+}
+
+async function disablePush() {
+  const reg = await navigator.serviceWorker.getRegistration();
+  const sub = reg && await reg.pushManager.getSubscription();
+  if (sub) await sub.unsubscribe();
+  if (account) await cloud.deletePushSubscription(account.uid).catch(() => {});
+  ui.pushState = 'off';
+  render();
+}
+
+function notifCard() {
+  if (!cloud.configured()) return '';
+  const ns = notifSettings(S);
+  const t = today();
+  const wi = weighInterval(S, t);
+  const next = nextWeighDate(S, t);
+  const hours = (k) => `<select data-input="notif" data-k="${k}">${Array.from({ length: 24 }, (_, i) => `<option value="${i}" ${+ns[k] === i ? 'selected' : ''}>${i} h</option>`).join('')}</select>`;
+  const row = (k, label, hk, help) => `<div class="notif-row"><label class="switch"><input type="checkbox" data-input="notif" data-k="${k}" ${ns[k] ? 'checked' : ''}><span>${label}</span></label>${hours(hk)}</div><p class="muted small notif-help">${help}</p>`;
+  let device;
+  if (!account) device = '<p>Connecte-toi à ton compte (en haut de cette page) pour activer les notifications.</p>';
+  else if (ui.pushState === 'install') device = '<div class="alert info"><div>Sur iPhone et iPad, les notifications ne marchent que depuis l’app installée : dans Safari, touche <strong>Partager → Sur l’écran d’accueil</strong>, ouvre l’app depuis la nouvelle icône, puis reviens ici. (iOS 16.4 ou plus récent.)</div></div>';
+  else if (ui.pushState === 'unsupported') device = '<p class="muted">Ce navigateur ne gère pas les notifications.</p>';
+  else if (ui.pushState === 'denied') device = '<div class="alert warn"><div>Notifications bloquées pour cette app. Sur iPhone : <strong>Réglages → Notifications → Sèche</strong> → Autoriser.</div></div>';
+  else if (ui.pushState === 'on') device = '<p><span class="sync ok"><i></i>Activées sur cet appareil</span></p><div class="row-actions wrap"><button class="btn ghost small" data-act="testPush">Tester l’affichage</button><button class="btn ghost small" data-act="disablePush">Désactiver sur cet appareil</button></div>';
+  else device = '<button class="btn primary" data-act="enablePush">Activer les notifications sur cet appareil</button>';
+  return `<div class="card"><h2>Notifications</h2>${device}
+    <h3 class="notif-title">Rappels</h3>
+    ${row('meals', 'Repas à compléter', 'mealsHour', 'Le soir, si le petit-déjeuner, le déjeuner ou le dîner ne sont pas notés (les collations ne comptent pas).')}
+    ${row('sport', 'Séance du jour', 'sportHour', 'Les jours de musculation prévus, si la séance n’est pas validée.')}
+    ${row('weigh', 'Pesée', 'weighHour', `Prochaine pesée : <strong>${next <= t ? 'aujourd’hui' : longDate(next)}</strong>.`)}
+    <label class="field"><span>Fréquence des pesées</span><select data-input="notif" data-k="weighEvery">
+      <option value="auto" ${ns.weighEvery === 'auto' ? 'selected' : ''}>Automatique : tous les 5 jours, puis chaque semaine si la progression est bonne</option>
+      <option value="5" ${+ns.weighEvery === 5 ? 'selected' : ''}>Tous les 5 jours</option>
+      <option value="7" ${+ns.weighEvery === 7 ? 'selected' : ''}>Toutes les semaines</option></select></label>
+    ${wi.auto ? `<p class="muted small">${wi.good ? `Progression bonne (${fmt(wi.rate, 2)} %/sem sur 3 semaines) : pesée <strong>chaque semaine</strong>.` : `Pour l’instant : <strong>tous les 5 jours</strong>. Passage à une pesée par semaine quand tu perds 0,4 à 1,2 % de ton poids par semaine sur les 3 dernières semaines${wi.rate != null ? ` (actuellement ${fmt(wi.rate, 2)} %/sem)` : ''}.`}</p>` : ''}
+    <p class="muted small">Les rappels sont vérifiés toutes les heures ; ils peuvent arriver avec quelques minutes de retard. Réglages partagés entre tes appareils.</p></div>`;
+}
+
 function suiviSettings() {
   const st = S.settings;
   const lastW = [...S.weights].sort((a, b) => b.date.localeCompare(a.date))[0];
@@ -864,6 +948,7 @@ function suiviSettings() {
     </div>
     <p class="muted small">Poids utilisé : ${lastW ? fmt(num(lastW.kg)) + ' kg (dernière pesée)' : 'aucune pesée — enregistre ton poids d’abord'}. Formule de Mifflin-St Jeor × niveau d’activité − déficit ; protéines 2,2 g/kg, lipides 25 % des calories, glucides = reste, fibres 14 g / 1000 kcal.</p>
     <button class="btn primary" data-act="calcTargets" ${lastW ? '' : 'disabled'}>Calculer et appliquer</button></div>
+  ${notifCard()}
   <div class="card"><h2>Surcharge progressive</h2><label class="switch"><input type="checkbox" data-input="setting" data-k="confirmTwice" ${st.confirmTwice ? 'checked' : ''}><span>Exiger le haut de fourchette sur 2 séances de suite avant d’augmenter la charge (règle ACSM / NSCA « 2-for-2 », plus prudente)</span></label>
   <p class="muted small">Les fourchettes de répétitions et incréments se règlent par exercice dans Sport › Exercices. <a href="docs/surcharge-progressive.html" target="_blank" rel="noopener">Méthode et sources</a></p></div>
   <div class="card"><h2>Sauvegarde et iPhone ↔ iPad</h2><p class="muted small">Les données restent sur l’appareil (aucun compte, aucun serveur). Exporte régulièrement une sauvegarde dans Fichiers / iCloud Drive. ${st.lastExport ? 'Dernier export : ' + longDate(st.lastExport) + '.' : 'Aucun export pour l’instant.'}</p>
@@ -1051,7 +1136,14 @@ const actions = {
   authMode(el) { ui.authMode = el.dataset.mode; render(); },
   async signOut() {
     if (!confirm('Se déconnecter ? Tes données restent dans ton compte ; l’app repassera sur les données de cet appareil sans compte.')) return;
+    // Les rappels de ce compte ne doivent plus arriver sur cet appareil.
+    if (ui.pushState === 'on') await disablePush().catch(() => {});
     await cloud.signOutUser();
+  },
+  enablePush() { enablePush(); },
+  disablePush() { disablePush().then(() => toast('Notifications désactivées sur cet appareil.')); },
+  testPush() {
+    navigator.serviceWorker.ready.then((reg) => reg.showNotification('Test ✅', { body: 'Les notifications s’affichent bien sur cet appareil.', icon: 'icons/icon-192.png' }));
   },
   async resetPw() {
     const email = ($('[data-form="auth"] [name="email"]') || {}).value;
@@ -1248,6 +1340,13 @@ const inputs = {
   },
   progEx(el) { ui.progEx = el.value; render(); },
   target(el) { S.settings.targets[el.dataset.k] = num(el.value); persist('Objectifs modifiés', { group: 'targets' }); },
+  notif(el) {
+    const k = el.dataset.k;
+    const v = el.type === 'checkbox' ? el.checked : k === 'weighEvery' ? (el.value === 'auto' ? 'auto' : +el.value) : +el.value;
+    S.settings.notif = { ...notifSettings(S), [k]: v };
+    persist('Réglages des rappels');
+    render();
+  },
   setting(el) { S.settings[el.dataset.k] = el.type === 'checkbox' ? el.checked : el.tagName === 'SELECT' && el.dataset.k === 'sex' ? el.value : num(el.value); persist('Réglages modifiés', { group: 'settings' }); },
   exType(el) {
     const d = TYPE_DEFAULTS[el.value]; const f = el.form;
@@ -1376,6 +1475,7 @@ function bind() {
   dlg().addEventListener('click', (e) => { if (e.target === dlg()) closeDialog(); });
   // Nouveau jour pendant que l'app est ouverte (iPad en veille la nuit)
   document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') refreshPushState();
     if (document.visibilityState === 'visible' && ui.day !== today()) {
       if (ui.workoutDate === ui.day) ui.workoutDate = today();
       if (ui.mealDate === ui.day) ui.mealDate = today();
@@ -1387,8 +1487,18 @@ function bind() {
   window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(afterRender, 150); });
 }
 
+// Ouverture depuis une notification : ?open=poids | repas | sport
+{
+  const params = new URLSearchParams(location.search);
+  const open = params.get('open');
+  if (open === 'poids') { ui.tab = 'suivi'; ui.suiviView = 'poids'; }
+  if (open === 'repas') { ui.tab = 'meals'; ui.mealsView = 'day'; }
+  if (open === 'sport') { ui.tab = 'sport'; ui.sportView = 'today'; }
+  if (open) { params.delete('open'); history.replaceState(null, '', location.pathname + (params.toString() ? '?' + params : '')); }
+}
 bind();
 render();
+refreshPushState();
 refreshUndo();
 cloud.init(onAccount);
 // Accès de débogage (console du navigateur / tests).

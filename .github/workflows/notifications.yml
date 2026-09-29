@@ -1,0 +1,38 @@
+name: Rappels (notifications)
+
+on:
+  schedule:
+    - cron: '7 * * * *' # toutes les heures (GitHub peut décaler de quelques minutes)
+  workflow_dispatch:
+    inputs:
+      test:
+        description: 'Envoyer une notification de test à tous les appareils'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: notifications
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/notify/package-lock.json
+      - run: npm ci
+        working-directory: tools/notify
+      - run: node notify.mjs
+        working-directory: tools/notify
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          TEST: ${{ inputs.test }}

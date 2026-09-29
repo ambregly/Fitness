@@ -46,6 +46,10 @@ Double progression : on garde la charge et on ajoute des répétitions jusqu’a
 
 Fonctionnement : les données sont découpées en blocs (réglages, pesées, cardio, séances par année, repas par mois) stockés dans `users/{uid}/chunks/…` ; les règles `firestore.rules` limitent chaque compte à ses propres données. Chaque envoi est une transaction : si un autre appareil a modifié le même bloc entre‑temps, les deux versions sont fusionnées au lieu d’être écrasées.
 
+## Notifications (rappels)
+
+Rappels de repas à compléter, de séance non faite et de pesée (tous les 5 jours, puis chaque semaine quand la progression est bonne), envoyés en Web Push sur l’iPhone / l’iPad (app installée, iOS 16.4+). Une tâche GitHub Actions (`.github/workflows/notifications.yml`) tourne toutes les heures : `tools/notify/notify.mjs` relit les données de chaque compte abonné et utilise la même logique que l’app (`js/reminders.js`). Configuration (2 secrets GitHub) : [`docs/notifications.html`](docs/notifications.html).
+
 ## Développement
 
 Aucune dépendance ni étape de build : HTML, CSS et JavaScript (modules ES).
