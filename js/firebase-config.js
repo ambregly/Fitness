@@ -12,4 +12,11 @@
 //
 // Ces valeurs ne sont pas secrètes : l'accès aux données est protégé par les règles
 // Firestore (chaque compte ne voit que ses propres données).
-export const firebaseConfig = null;
+export const firebaseConfig = {
+  apiKey: 'AIzaSyAl-Yriy3nVUJMjUPCYGDaEpbzGYAGItk0',
+  authDomain: 'fitness-869e4.firebaseapp.com',
+  projectId: 'fitness-869e4',
+  storageBucket: 'fitness-869e4.firebasestorage.app',
+  messagingSenderId: '68753922138',
+  appId: '1:68753922138:web:937bed1d46b965f0cd2063',
+};

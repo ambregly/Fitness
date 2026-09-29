@@ -54,6 +54,8 @@ const FR_ERRORS = {
   'auth/user-not-found': 'Aucun compte avec cet e-mail.',
   'auth/too-many-requests': 'Trop de tentatives, réessaie dans quelques minutes.',
   'auth/network-request-failed': 'Pas de connexion internet.',
+  'auth/operation-not-allowed': 'La connexion par e-mail n’est pas encore activée dans Firebase (Authentication › Sign-in method › E-mail/Mot de passe).',
+  'permission-denied': 'Accès refusé par Firebase : vérifie les règles Firestore (voir le guide).',
 };
 export const errorText = (e) => FR_ERRORS[e && e.code] || (e && e.message) || 'Erreur inconnue.';
 
